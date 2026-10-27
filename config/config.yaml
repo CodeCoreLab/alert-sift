@@ -1,0 +1,61 @@
+# alert-sift 全局配置（样例 —— 复制后按环境修改）
+# 链路：vmalert/Alertmanager -> POST /api/v2/alerts -> pipeline -> Notifier
+
+# ==================== 业务分组（groups） ====================
+# classify 阶段使用：项目中文名、hostname 前缀分组、IP 网段兜底
+groups:
+  # 项目代号 → 中文显示名（通知卡片标题用；未配置时代号原样显示）
+  project_names:
+    APP: "核心业务"
+    OPS: "运维平台"
+  # hostname 前缀 → 分组标签（hostname 形如 APP-search-09 → group=APP）
+  prefixes: [APP, OPS]
+  # IP 网段前缀 → 分组（hostname 缺失时的兜底）
+  ip_prefixes: {}
+    # "10.70.0.": "APP"
+
+# ==================== 项目路由（project_mapping） ====================
+# project=SYS 的系统级告警按 IP 前缀改派到业务项目机器人
+project_mapping: []
+  # - project: APP
+  #   ip_prefixes: ["10.70.0."]
+  # - project: OPS
+  #   ip_prefixes: ["10.71.11."]
+
+# ==================== 通知（notifiers） ====================
+notifiers:
+  # 企微机器人路由：project → webhook URL
+  # 安全：URL 中的 key 用环境变量 ${WECOM_BOT_APP} 引用，禁止明文提交
+  wecom:
+    robots:
+      SYS: "${WECOM_BOT_SYS}"
+      APP: "${WECOM_BOT_APP}"
+      OPS: "${WECOM_BOT_OPS}"
+  # severity → 额外双发机器人（P0 缺省双发 SYS 值班群，必须可达）
+  routing:
+    severity_extra_robots: {}
+      # P0: [SYS]
+  # 出站限流：企微官方 20 条/min/robot，默认预留余量 15
+  # 环境变量 ALERT_SIFT_WECOM_RATE_PER_MIN 覆盖
+  # retry: {max_attempts: 3, backoff: [1, 3, 5]}
+
+# ==================== 去重窗口（dedup） ====================
+dedup:
+  # 短窗口：同 fingerprint 状态变更冷却（秒）
+  short_window: 120
+  # 长窗口：同内容重复告警折叠（秒），P0 豁免
+  long_window: 3600
+  # 风暴折叠：同分组窗口内超限后折叠为计数卡
+  storm_limit: 5
+  storm_window: 60
+
+# ==================== 静默/抑制（silences / inhibits） ====================
+# 空缺省；silences.yaml / inhibits.yaml 存在时整体覆盖同名键
+silences: []
+inhibits: []
+
+# ==================== 抑制（inhibits） ====================
+# 见 inhibits.yaml：父告警压制子告警
+# inhibit:
+#   - source: {alertname: HostDown}
+#     target: {type: host}   # 主机宕机时压制其上所有 host 类告警

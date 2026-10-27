@@ -1,0 +1,9 @@
+# 通知路由样例（notifiers）—— L7 通知可编程权威源
+# 存在本文件即覆盖 config.yaml 的 notifiers 段
+notifiers:
+  wecom:
+    robots: {}
+      # SYS: "${WECOM_BOT_SYS}"
+      # APP: "${WECOM_BOT_APP}"
+  routing:
+    severity_extra_robots: {}

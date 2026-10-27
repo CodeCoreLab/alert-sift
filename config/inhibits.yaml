@@ -1,0 +1,6 @@
+# 抑制规则样例 —— L4 父告警压制子告警
+# 顶层直接是列表（本文件整体覆盖 config.yaml 的 inhibits 键）
+# 语义：source 命中的告警 firing 期间，target 命中的告警不通知
+[]
+# - source: {alertname: "HostDown"}
+#   target: {type: "host"}

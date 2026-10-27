@@ -1,0 +1,12 @@
+# 静默规则样例 —— L3 静默匹配命中即跳过通知
+# 顶层直接是列表（本文件整体覆盖 config.yaml 的 silences 键）
+# 管理 API /admin/silences 可动态增删；示例如下
+[]
+# - matchers:
+#     project: "APP"
+#   reason: "周版本发布窗口"
+#   window: {start: "02:00", end: "04:00"}
+# - matchers:
+#     alertname: "CpuHigh"
+#     instance: "10.0.0.1"
+#   reason: "压测中，已知负载"

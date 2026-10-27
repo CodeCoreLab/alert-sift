@@ -1,0 +1,39 @@
+{% set status_emoji = '🔴' if alerts[0].status == 'firing' else '🟢' -%}
+{% set status_label = '告警触发' if alerts[0].status == 'firing' else '告警恢复' -%}
+{% set sev_color = {'P0': 'warning', 'P1': 'warning', 'P2': 'warning', 'P3': 'comment', 'P4': 'comment'} -%}
+{{ status_emoji }} **{{ status_label }}** ｜ {{ alerts[0].project|project_cn }} ｜ 共 {{ alerts|length }} 条
+{% if tips -%}
+{{ tips }}
+{% endif -%}
+{% for a in alerts -%}
+{% set host = a.labels.get('hostname') or a.labels.get('host') or a.labels.get('node') or a.labels.get('ip') or a.labels.get('instance') or 'N/A' -%}
+{% set ip = a.labels.get('ip') or '' -%}
+{% set host_display = host + ('　`' + ip + '`') if (ip and ip != host) else host -%}
+{% set agg = a.annotations.get('aggregated_count') or alerts[0].annotations.get('aggregated_count') or '' -%}
+{% set summary_stripped = (a.annotations.get('summary') or '').strip() -%}
+{% set rule_display = (a.rule_cn or summary_stripped or a.rule_name|friendly_name).strip() -%}
+{% set color = sev_color.get((a.severity or '').upper(), 'comment') -%}
+{% set agg_suffix = '　**（聚合 ' ~ agg ~ ' 条）**' if (loop.first and agg) else '' -%}
+> {{ a.severity|severity_emoji }} <font color="{{ color }}">{{ a.severity }}·{{ a.severity|severity_label }}</font>　**{{ rule_display }}**{{ agg_suffix }}
+> **主机**　{{ host_display }}
+> **触发**　{{ a.starts_at|fmt_time }} · 已持续 {{ a.starts_at|fmt_duration }}
+{% if a.status == 'resolved' and a.ends_at -%}
+> **恢复**　{{ a.ends_at|fmt_time }}
+{% endif -%}
+{% if a.annotations.description -%}
+> **详情**　{{ a.annotations.description }}
+{% endif -%}
+{% if a.annotations.llm_advice -%}
+> **建议**　{{ a.annotations.llm_advice }}
+{% endif -%}
+{% if a.annotations.runbook -%}
+> **处置**　[查看手册]({{ a.annotations.runbook }})
+{% endif -%}
+{% if not loop.last %}
+
+{% endif -%}
+{% endfor -%}
+{% if alerts[0].annotations.get('ai_cluster') -%}
+
+**根因**　{{ alerts[0].annotations.ai_cluster }}
+{% endif %}

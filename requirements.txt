@@ -1,0 +1,12 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+httpx>=0.27
+jinja2>=3.1
+pyyaml>=6.0
+tzdata>=2024.1  # Windows/容器内 IANA 时区数据（Linux 系统自带）
+
+# 可选 extras：
+#   MCP Server（AI 运维控制面）: pip install "alert-sift[mcp]"
+#     mcp>=1.2  fastmcp>=2.0
+#   MySQL 历史存储（默认 SQLite 零依赖）: pip install "alert-sift[mysql]"
+#     pymysql>=1.1

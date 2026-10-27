@@ -1,0 +1,32 @@
+# AI 运维护栏配置（guard）—— RBAC / 高危审批
+# 适用：MCP Server 的 AI 写操作；human 角色默认全开
+
+DEFAULT_ROLE: ai
+
+RBAC:
+  human:
+    # human 全开：列出即允许动作，"*" 为通配
+    - "*"
+  ai:
+    # AI 允许的低危动作（读类 + 带 dry_run 的预览）
+    - alert_list
+    - alert_ack
+    - silence_list
+    - inhibit_list
+    - rule_list
+    - notifier_list
+    - config_diff
+    - db_stats
+    - history_export
+
+HIGH_RISK:
+  # 高危动作：AI 调用须先 request_approval，human approve 后放行
+  - silence_create
+  - silence_delete
+  - inhibit_create
+  - inhibit_delete
+  - rule_upsert
+  - notifier_update
+  - config_reload
+
+APPROVAL_VALID_SECONDS: 600
