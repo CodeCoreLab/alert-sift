@@ -6,6 +6,30 @@
 
 > 源自生产环境日均千级告警的实战沉淀，替代 "Alertmanager + 一堆脚本" 的松散组合。
 
+## 产品介绍页（web/）
+
+`web/` 是本项目的产品介绍页（单文件，内联样式与脚本，无外部资源依赖），
+浏览器直接打开即可预览，无需任何构建依赖：
+
+```bash
+# 构建发布产物（站点地址由构建期注入，不写进源码）
+python web/build.py --out /tmp/alert-sift-dist --site-url https://<站点>/
+
+# 本地预览
+python -m http.server -d /tmp/alert-sift-dist 8080
+```
+
+| 项 | 说明 |
+|---|---|
+| `web/index.html` | 页面源码（真源，样式与脚本全部内联） |
+| `web/build.py` | 构建脚本：注入「返回工具站」导航 + 敏感信息自检 + 根绝对引用检查 |
+
+**设计约束**：
+
+- 站点地址**不写在源码里**，由 `--site-url` 注入 —— 源码可安全进公开仓库
+- 构建期做敏感信息自检（内网 IP / 内部域名 / 明文凭据 / 私钥），命中即构建失败
+- 不产生根绝对引用（`/xxx` 形式），站内跳转一律用页内锚点
+
 ## 为什么不用 Alertmanager 直连 webhook
 
 | 痛点 | alert-sift 的解法 |
@@ -59,7 +83,7 @@ Alertmanager webhook (POST /api/v2/alerts)
 
 ## AI 运维护栏（MCP Server）—— 核心差异化
 
-内置 MCP Server（16 个工具），AI 助手可直接查询与操作告警系统；
+内置 MCP Server（19 个工具），AI 助手可直接查询与操作告警系统；
 `guard.py` 为 AI 写操作提供三层护栏：
 
 1. **RBAC**：`ai` 角色仅放行读类与预览动作，`human` 全开（`configs/guard.yaml`）

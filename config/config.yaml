@@ -12,15 +12,15 @@ groups:
   prefixes: [APP, OPS]
   # IP 网段前缀 → 分组（hostname 缺失时的兜底）
   ip_prefixes: {}
-    # "10.70.0.": "APP"
+    # "10.0.0.": "APP"
 
 # ==================== 项目路由（project_mapping） ====================
 # project=SYS 的系统级告警按 IP 前缀改派到业务项目机器人
 project_mapping: []
   # - project: APP
-  #   ip_prefixes: ["10.70.0."]
+  #   ip_prefixes: ["10.0.0."]
   # - project: OPS
-  #   ip_prefixes: ["10.71.11."]
+  #   ip_prefixes: ["10.0.1."]
 
 # ==================== 通知（notifiers） ====================
 notifiers:

@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>alert-sift — 告警降噪网关 · 七阶段流水线 + AI 运维护栏</title>
+<meta name="description" content="alert-sift 是 Alertmanager 兼容的告警降噪网关：去重 · 静默 · 抑制 · 聚合 · 分级 · 通知 · 持久化，内置 MCP AI 运维护栏，让 AI 安全地管理你的告警系统。">
+<meta property="og:title" content="alert-sift — 告警降噪网关">
+<meta property="og:description" content="七阶段降噪流水线 + 三层 AI 护栏，把告警风暴筛成一条该看的通知。">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#EFF6F5">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23EFF6F5' stroke='%23CBDCDB'/%3E%3Cpath d='M8 9h16M11 16h10M14 23h4' stroke='%23B45309' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/* ============================================================
+   alert-sift 产品介绍页 — 设计规范
+   风格：Kinetic Minimal（浅青底技术感 · 单一信号色）
+   配色：浅青底 #EFF6F5→米白 #FBF9F4 纵向渐变 / 卡片纯白提层次
+         信号琥珀 —— 图形填充 #FFB23F，浅底文字 #B45309
+   字体：系统中文黑体 + 等宽点缀（阶段代号 / 数据 / 代码）
+   动效：hover 160-240ms · 入场 600-700ms · 组内 stagger 70ms
+         信号流动 dash 3s · prefers-reduced-motion 全局降级
+   可访问性：WCAG 2.1 AA — --mut #4C5763 ≈ 7.3:1 / --sub #697583 ≈ 4.9:1
+           / --acc-ink #B45309 ≈ 5.0:1（浅底琥珀文字）
+   ============================================================ */
+:root{
+  --bg:#EFF6F5; --bg2:#E7F1F0; --panel:#FFFFFF; --panel2:#F7FAFA;
+  --line:#DCE8E7; --line2:#CBDCDB;
+  --ink:#161B22; --mut:#4C5763; --sub:#697583;
+  --acc:#FFB23F; --acc-ink:#B45309; --acc-dim:rgba(255,178,63,.16); --acc-line:rgba(180,83,9,.40);
+  --p0:#FF5F56; --ok:#39D98A; --ok-ink:#0E7C52;
+  --teal:#2E8C86;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Consolas,"Cascadia Code",monospace;
+  --sans:"MiSans","HarmonyOS Sans SC","PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --ease:cubic-bezier(.22,1,.36,1);
+  --maxw:1160px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  background:linear-gradient(180deg,#EDF5F4 0%,#F4F8F7 30%,#F8FAF8 62%,#FBF9F4 100%);
+  background-attachment:fixed;
+  color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.75;letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+/* 背景微网格 */
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:radial-gradient(rgba(22,27,34,.07) 1px,transparent 1px);
+  background-size:34px 34px;
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.9),rgba(0,0,0,.25) 40%,rgba(0,0,0,.14));
+  -webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,.9),rgba(0,0,0,.25) 40%,rgba(0,0,0,.14));
+}
+main,header,footer{position:relative;z-index:1}
+::selection{background:rgba(255,178,63,.35);color:#161B22}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--acc);outline-offset:3px;border-radius:4px}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+
+/* ---------- 滚动进度 ---------- */
+.progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:60;background:transparent}
+.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),#FF8A3D)}
+
+/* ---------- 导航 ---------- */
+.nav{position:fixed;top:0;left:0;right:0;z-index:50;transition:background .3s var(--ease),border-color .3s,backdrop-filter .3s;border-bottom:1px solid transparent}
+.nav.solid{background:rgba(255,255,255,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom-color:var(--line)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:0 28px;height:64px;display:flex;align-items:center;gap:26px}
+.brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:17px;letter-spacing:.02em}
+.brand .mk{width:30px;height:30px;border-radius:8px;background:linear-gradient(140deg,#F6F8FB,#EDF1F6);border:1px solid var(--line2);display:grid;place-items:center;flex:none}
+.brand .mk svg{display:block}
+.brand small{font-family:var(--mono);font-weight:500;font-size:11px;color:var(--sub);letter-spacing:.06em;margin-left:2px}
+.nav-links{display:flex;gap:4px;margin-left:auto}
+.nav-links a{font-size:13.5px;color:var(--mut);padding:7px 13px;border-radius:8px;transition:color .18s,background .18s;position:relative}
+.nav-links a:hover{color:var(--ink);background:rgba(22,27,34,.055)}
+.nav-links a.on{color:var(--ink)}
+.nav-links a.on::after{content:"";position:absolute;left:13px;right:13px;bottom:2px;height:2px;border-radius:2px;background:var(--acc)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:650;border-radius:10px;cursor:pointer;border:none;font-family:inherit;transition:transform .18s var(--ease),box-shadow .22s,background .2s,color .2s}
+.btn-p{background:var(--acc);color:#141006;font-size:14.5px;padding:10px 20px;box-shadow:0 0 0 0 rgba(255,178,63,0)}
+.btn-p:hover{transform:translateY(-2px);box-shadow:0 10px 28px -8px rgba(255,178,63,.45)}
+.btn-p:active{transform:translateY(0) scale(.98)}
+.btn-s{background:transparent;color:var(--ink);font-size:14.5px;padding:10px 20px;border:1px solid var(--line2)}
+.btn-s:hover{border-color:var(--acc-line);color:var(--acc-ink);transform:translateY(-2px)}
+.btn-l{background:rgba(255,255,255,.8);color:var(--ink);font-size:13.5px;padding:8px 16px;border:1px solid var(--line2)}
+.btn-l:hover{border-color:var(--acc-line);color:var(--acc-ink)}
+.nav .btn-p{padding:9px 18px}
+.burger{display:none;background:none;border:1px solid var(--line2);border-radius:9px;width:38px;height:38px;cursor:pointer;align-items:center;justify-content:center;flex-direction:column;gap:4px}
+.burger i{width:15px;height:1.6px;background:var(--mut);display:block;transition:.25s var(--ease)}
+.m-menu{display:none;flex-direction:column;gap:2px;padding:10px 20px 20px;background:rgba(255,255,255,.97);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}
+.m-menu a{padding:12px 8px;font-size:15px;color:var(--mut);border-bottom:1px solid rgba(22,27,34,.06)}
+.m-menu a:last-child{border:none}
+.m-menu.open{display:flex}
+
+/* ---------- Hero ---------- */
+.hero{padding:150px 0 60px;position:relative;overflow:hidden}
+/* 氛围光晕：浅青 + 琥珀双径向 */
+.hero::before{
+  content:"";position:absolute;inset:-64px 0 0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(56% 62% at 78% 26%,rgba(255,178,63,.12),transparent 62%),
+    radial-gradient(52% 58% at 8% 22%,rgba(46,140,134,.10),transparent 64%),
+    radial-gradient(70% 50% at 50% 100%,rgba(255,255,255,.55),transparent 70%);
+}
+.hero>.wrap,.hero>.stats{position:relative;z-index:1}
+.hero-grid{display:grid;grid-template-columns:1.04fr .96fr;gap:56px;align-items:center}
+.badge{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:12px;letter-spacing:.05em;color:var(--acc-ink);background:var(--acc-dim);border:1px solid var(--acc-line);padding:6px 14px;border-radius:99px}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--acc);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(255,178,63,.5)}50%{opacity:.6;box-shadow:0 0 0 5px rgba(255,178,63,0)}}
+.hero h1{font-size:clamp(34px,4.6vw,58px);line-height:1.22;font-weight:850;letter-spacing:.015em;margin:26px 0 0}
+.hero h1 .hl{color:var(--acc-ink);position:relative;white-space:nowrap}
+.hero h1 .hl::after{content:"";position:absolute;left:0;right:0;bottom:6px;height:10px;background:rgba(255,178,63,.32);z-index:-1;transform:scaleX(0);transform-origin:left;animation:swipe .9s .7s var(--ease) forwards}
+@keyframes swipe{to{transform:scaleX(1)}}
+.hero .sub{color:var(--mut);font-size:16.5px;max-width:54ch;margin-top:20px}
+.hero .sub b{color:var(--ink);font-weight:650}
+.hero-cta{display:flex;gap:14px;margin-top:34px;flex-wrap:wrap}
+.hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--sub)}
+.hero-note code{color:var(--mut)}
+
+/* hero 过筛画布 */
+.siftbox{position:relative;background:linear-gradient(180deg,#FFFFFF,#F1F8F7);border:1px solid var(--line2);border-radius:16px;padding:18px 18px 14px;box-shadow:0 30px 70px -30px rgba(22,60,58,.22)}
+.siftbox .hd{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11.5px;color:var(--sub);letter-spacing:.05em;margin-bottom:10px}
+.siftbox .hd .lg{display:flex;gap:6px}
+.siftbox .hd .lg i{width:9px;height:9px;border-radius:50%;background:#CBDCDB}
+.siftbox canvas{display:block;width:100%;height:330px;border-radius:10px;background:radial-gradient(120% 90% at 20% 0%,rgba(46,140,134,.05),rgba(255,255,255,.55) 60%,rgba(255,255,255,.2))}
+.sift-stats{display:flex;gap:18px;margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--sub);border-top:1px solid var(--line);padding-top:11px}
+.sift-stats b{color:var(--ink);font-weight:600}
+.sift-stats .g b{color:var(--acc-ink)}
+.float-tag{position:absolute;font-family:var(--mono);font-size:11px;color:var(--sub);background:rgba(255,255,255,.92);border:1px solid var(--line2);border-radius:7px;padding:4px 9px;backdrop-filter:blur(6px);animation:floaty 7s ease-in-out infinite}
+.float-tag.t1{top:-13px;left:22px}
+.float-tag.t2{bottom:-13px;right:20px;animation-delay:-3.5s;color:var(--acc-ink);border-color:var(--acc-line)}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+
+/* ---------- 统计带 ---------- */
+.stats{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--bg2);margin-top:70px}
+.stats-in{max-width:var(--maxw);margin:0 auto;padding:34px 28px;display:grid;grid-template-columns:repeat(5,1fr);gap:18px}
+.stat{text-align:center;position:relative}
+.stat:not(:last-child)::after{content:"";position:absolute;right:-9px;top:14%;height:72%;width:1px;background:var(--line)}
+.stat b{display:block;font-family:var(--mono);font-size:clamp(26px,3vw,38px);font-weight:700;color:var(--ink);line-height:1.15}
+.stat b i{color:var(--acc-ink);font-style:normal}
+.stat span{font-size:12.5px;color:var(--sub);letter-spacing:.06em}
+
+/* ---------- 章节骨架 ---------- */
+.sec{padding:110px 0 0}
+.sec-head{display:flex;align-items:baseline;gap:20px;margin-bottom:14px}
+.sec-no{font-family:var(--mono);font-size:13px;color:var(--acc-ink);letter-spacing:.18em;flex:none}
+.sec-head::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
+.sec h2{font-size:clamp(26px,3.4vw,40px);font-weight:800;letter-spacing:.01em;line-height:1.3}
+.sec .lead{color:var(--mut);max-width:64ch;margin-top:14px;font-size:15.5px}
+.sec .lead b{color:var(--ink);font-weight:650}
+
+/* ---------- 01 痛点对照 ---------- */
+.pain{margin-top:44px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--panel)}
+.pain-row{display:grid;grid-template-columns:1fr 56px 1.15fr;align-items:center;gap:0;padding:20px 26px;border-bottom:1px solid var(--line);transition:background .2s}
+.pain-row:last-child{border-bottom:none}
+.pain-row:hover{background:rgba(255,178,63,.045)}
+.pain-h{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--sub);background:var(--bg2);padding:13px 26px;display:grid;grid-template-columns:1fr 56px 1.15fr;border-bottom:1px solid var(--line2)}
+.pain-h span:last-child{color:var(--acc-ink)}
+.pain .bad{color:var(--mut);font-size:14.5px;display:flex;gap:11px;align-items:flex-start}
+.pain .bad svg{flex:none;margin-top:5px}
+.pain .good{color:var(--ink);font-size:14.5px;display:flex;gap:11px;align-items:flex-start}
+.pain .good svg{flex:none;margin-top:5px}
+.pain .good code{font-family:var(--mono);font-size:12.5px;color:var(--acc-ink);background:var(--acc-dim);padding:1px 7px;border-radius:5px}
+.pain .arw{display:grid;place-items:center;color:var(--line2);transition:color .25s,transform .3s var(--ease)}
+.pain-row:hover .arw{color:var(--acc-ink);transform:translateX(5px)}
+
+/* ---------- 02 流水线 ---------- */
+.pipe{margin-top:48px;position:relative}
+.pipe-rail{position:relative;height:38px;margin-bottom:6px}
+.pipe-rail .track{position:absolute;left:0;right:0;top:50%;height:1.5px;background:linear-gradient(90deg,var(--line2),var(--line));border-radius:2px}
+.pipe-rail .track::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--acc) 0 7px,transparent 7px 16px);opacity:.55;mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.pipe-rail .pulse{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:var(--acc);transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(255,178,63,.18),0 0 18px 3px rgba(255,178,63,.55);animation:travel 7s linear infinite}
+@keyframes travel{0%{left:0%;opacity:0}6%{opacity:1}94%{opacity:1}100%{left:100%;opacity:0}}
+.stages{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px 13px 15px;position:relative;overflow:hidden;transition:transform .24s var(--ease),border-color .24s,background .24s}
+.stage::before{content:"";position:absolute;inset:0;background:radial-gradient(90% 70% at 50% 0%,rgba(255,178,63,.12),transparent 70%);opacity:0;transition:opacity .3s}
+.stage:hover{transform:translateY(-7px);border-color:var(--acc-line);background:var(--panel2)}
+.stage:hover::before{opacity:1}
+.stage .lv{font-family:var(--mono);font-size:11px;color:var(--acc-ink);letter-spacing:.1em}
+.stage h3{font-size:16px;font-weight:750;margin-top:8px;letter-spacing:.02em;position:relative}
+.stage .en{font-family:var(--mono);font-size:11.5px;color:var(--sub);margin-top:2px;position:relative}
+.stage p{font-size:12.5px;color:var(--mut);line-height:1.65;margin-top:10px;position:relative}
+.stage .tag{display:inline-block;margin-top:10px;font-family:var(--mono);font-size:10.5px;color:var(--acc-ink);border:1px solid var(--acc-line);border-radius:5px;padding:1px 7px;position:relative}
+.pipe-note{margin-top:22px;font-family:var(--mono);font-size:12.5px;color:var(--sub);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pipe-note code{color:var(--mut)}
+
+/* ---------- 03 AI 护栏 ---------- */
+.guard-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:46px}
+.guard{background:linear-gradient(180deg,#FFFFFF,#F1F8F7);border:1px solid var(--line);border-radius:16px;padding:30px 26px 28px;position:relative;overflow:hidden;transition:transform .26s var(--ease),border-color .26s}
+.guard:hover{transform:translateY(-8px);border-color:var(--acc-line)}
+.guard .ic{width:46px;height:46px;border-radius:12px;background:var(--acc-dim);border:1px solid var(--acc-line);display:grid;place-items:center;margin-bottom:20px}
+.guard .no{position:absolute;top:20px;right:24px;font-family:var(--mono);font-size:44px;font-weight:700;color:rgba(22,27,34,.07);line-height:1}
+.guard h3{font-size:18.5px;font-weight:750}
+.guard .k{font-family:var(--mono);font-size:11.5px;color:var(--acc-ink);margin-top:5px;letter-spacing:.05em}
+.guard p{color:var(--mut);font-size:14px;margin-top:13px;line-height:1.75}
+.guard p b{color:var(--ink);font-weight:650}
+.guard-flow{margin-top:22px;display:flex;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px}
+.guard-flow span{background:rgba(22,27,34,.045);border:1px solid var(--line2);color:var(--mut);border-radius:6px;padding:3px 9px}
+.guard-flow span:last-child{color:var(--ok-ink);border-color:rgba(14,124,82,.35)}
+
+/* ---------- 04 快速开始 ---------- */
+.quick{display:grid;grid-template-columns:.9fr 1.1fr;gap:44px;margin-top:46px;align-items:start}
+/* grid 子项默认 min-width:auto，会被 pre/长 code 撑破视口 —— 移动端必收窄 */
+.quick>*{min-width:0}
+.steps{counter-reset:st}
+.step{display:flex;gap:18px;padding:20px 0;border-bottom:1px dashed var(--line2)}
+.step:last-child{border-bottom:none}
+.step .n{flex:none;width:34px;height:34px;border-radius:10px;background:var(--acc-dim);border:1px solid var(--acc-line);color:var(--acc-ink);font-family:var(--mono);font-size:14px;display:grid;place-items:center;font-weight:700}
+.step h4{font-size:15.5px;font-weight:700}
+.step p{font-size:13.5px;color:var(--mut);margin-top:5px}
+.step p code{font-family:var(--mono);font-size:12.5px;color:var(--acc-ink)}
+.term{background:#F4F9F8;border:1px solid var(--line2);border-radius:14px;overflow:hidden;box-shadow:0 30px 60px -30px rgba(22,60,58,.25)}
+.term-hd{display:flex;align-items:center;gap:9px;padding:12px 16px;background:#E9F2F1;border-bottom:1px solid var(--line)}
+.term-hd .lg{display:flex;gap:6px}
+.term-hd .lg i{width:10px;height:10px;border-radius:50%;background:#CBDCDB}
+.term-hd .lg i:first-child{background:#AFC5C3}
+.term-hd .t{font-family:var(--mono);font-size:11.5px;color:var(--sub);margin-left:6px}
+.term-hd .cp{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--sub);background:transparent;border:1px solid var(--line2);border-radius:6px;padding:3px 10px;cursor:pointer;transition:.2s}
+.term-hd .cp:hover{color:var(--acc-ink);border-color:var(--acc-line)}
+.term pre{padding:20px 20px 22px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.85;color:#2B3540}
+.term .c{color:#7A8694}.term .k{color:var(--acc-ink)}.term .s{color:#1A7F37}.term .cmd{color:#161B22}
+.term .out{color:#57606A}
+.term-note{margin-top:14px;font-size:12.5px;color:var(--sub);display:flex;gap:9px;align-items:flex-start;line-height:1.7}
+.term-note svg{flex:none;margin-top:4px}
+
+/* ---------- 05 数据流 ---------- */
+.flow{margin-top:46px;background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:38px 30px 34px;overflow-x:auto}
+.flow-row{display:flex;align-items:center;justify-content:center;gap:0;min-width:760px}
+.fnode{background:var(--panel);border:1px solid var(--line2);border-radius:11px;padding:13px 18px;text-align:center;flex:none;transition:border-color .22s,transform .22s var(--ease)}
+.fnode:hover{border-color:var(--acc-line);transform:translateY(-3px)}
+.fnode b{display:block;font-size:14px;font-weight:700}
+.fnode span{font-family:var(--mono);font-size:10.5px;color:var(--sub)}
+.fnode.core{background:linear-gradient(160deg,#FFF7E8,#FFFDF8);border-color:var(--acc-line);box-shadow:0 0 40px -14px rgba(255,178,63,.7)}
+.fnode.core b{color:var(--acc-ink)}
+.fconn{width:64px;height:2px;flex:none;background:repeating-linear-gradient(90deg,var(--acc) 0 6px,transparent 6px 14px);animation:dash 1.6s linear infinite;opacity:.8}
+.fconn.dim{background:repeating-linear-gradient(90deg,var(--line2) 0 6px,transparent 6px 14px);animation:none}
+@keyframes dash{to{background-position:-20px 0}}
+.flow-sub{display:flex;justify-content:center;gap:14px;margin-top:26px;min-width:760px;flex-wrap:nowrap}
+.flow-note{margin-top:22px;font-family:var(--mono);font-size:12px;color:var(--sub);text-align:center}
+
+/* ---------- 06 特性 ---------- */
+.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:46px}
+.feat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 22px;transition:transform .24s var(--ease),border-color .24s,background .24s;position:relative;overflow:hidden}
+.feat::after{content:"";position:absolute;left:0;top:0;bottom:0;width:2.5px;background:var(--acc);transform:scaleY(0);transform-origin:top;transition:transform .32s var(--ease)}
+.feat:hover{transform:translateY(-6px);border-color:var(--line2);background:var(--panel2)}
+.feat:hover::after{transform:scaleY(1)}
+.feat .ix{font-family:var(--mono);font-size:11px;color:var(--sub);letter-spacing:.1em}
+.feat h4{font-size:16px;font-weight:750;margin-top:9px}
+.feat p{font-size:13.5px;color:var(--mut);margin-top:8px;line-height:1.7}
+
+/* ---------- 收尾 CTA ---------- */
+.final{margin-top:120px;position:relative;overflow:hidden;border-top:1px solid var(--line);background:linear-gradient(180deg,rgba(255,178,63,.14) 0%,rgba(253,247,236,.9) 34%,rgba(238,246,245,.8) 72%,rgba(231,241,240,.95) 100%)}
+.final-in{max-width:var(--maxw);margin:0 auto;padding:86px 28px 90px;text-align:center;position:relative}
+.final h2{font-size:clamp(28px,4vw,46px);font-weight:850;line-height:1.3}
+.final h2 em{font-style:normal;color:var(--acc-ink)}
+.final p{color:var(--mut);margin-top:16px;font-size:15.5px}
+.final .hero-cta{justify-content:center}
+/* 结尾流动光带 */
+.final .beam{position:absolute;left:10%;right:10%;top:0;height:1px;background:linear-gradient(90deg,transparent,var(--acc),transparent);opacity:.7;animation:beam 4.5s var(--ease) infinite}
+@keyframes beam{0%{transform:translateX(-60%) scaleX(.4);opacity:0}35%{opacity:.8}100%{transform:translateX(60%) scaleX(.6);opacity:0}}
+
+/* ---------- 页脚 ---------- */
+footer{border-top:1px solid var(--line);background:var(--bg2)}
+.foot{max-width:var(--maxw);margin:0 auto;padding:36px 28px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--sub)}
+.foot .sep{width:1px;height:14px;background:var(--line2)}
+.foot a{color:var(--mut);transition:color .18s}
+.foot a:hover{color:var(--acc-ink)}
+.foot .r{margin-left:auto;font-family:var(--mono);font-size:11.5px}
+
+/* ---------- 入场揭示（fail-open：仅在 html.js 下隐藏） ---------- */
+html.js .rv{opacity:0;transform:translateY(22px);transition:opacity .7s var(--ease),transform .7s var(--ease)}
+html.js .rv.in{opacity:1;transform:none}
+
+/* ---------- 响应式 ---------- */
+@media(max-width:1080px){
+  .stages{grid-template-columns:repeat(4,1fr)}
+  .pipe-rail{display:none}
+}
+@media(max-width:920px){
+  .nav-links,.nav .btn-p{display:none}
+  .burger{display:flex}
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .hero{padding-top:120px}
+  .stats-in{grid-template-columns:repeat(3,1fr);gap:26px 12px}
+  .stat:not(:last-child)::after{display:none}
+  .quick{grid-template-columns:1fr;gap:30px}
+  .guard-grid,.feats{grid-template-columns:1fr}
+  .pain-row,.pain-h{grid-template-columns:1fr;gap:10px}
+  .pain .arw{transform:rotate(90deg);justify-self:start}
+  .pain-row:hover .arw{transform:rotate(90deg) translateX(5px)}
+  .pain-h{display:none}
+}
+@media(max-width:640px){
+  .stages{grid-template-columns:1fr}
+  .stats-in{grid-template-columns:repeat(2,1fr)}
+  .sec{padding-top:84px}
+  .wrap{padding:0 20px}
+  .pain-row{padding:18px 18px}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  html{scroll-behavior:auto}
+  html.js .rv{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="progress"><i id="pbar"></i></div>
+
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top">
+      <span class="mk"><svg width="16" height="16" viewBox="0 0 32 32"><path d="M8 9h16M11 16h10M14 23h4" stroke="#B45309" stroke-width="3" stroke-linecap="round"/></svg></span>
+      alert-sift<small>告警降噪网关</small>
+    </a>
+    <nav class="nav-links">
+      <a href="#why">为什么</a>
+      <a href="#pipeline">七阶段流水线</a>
+      <a href="#guard">AI 护栏</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="#features">特性</a>
+      <a href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <a class="btn btn-p" href="#quickstart">快速开始</a>
+    <button class="burger" id="burger" aria-label="打开菜单" aria-expanded="false"><i></i><i></i><i></i></button>
+  </div>
+  <div class="m-menu" id="mmenu">
+    <a href="#why">为什么</a>
+    <a href="#pipeline">七阶段流水线</a>
+    <a href="#guard">AI 护栏</a>
+    <a href="#quickstart">快速开始</a>
+    <a href="#features">特性</a>
+    <a href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="badge rv"><span class="dot"></span>open source · MIT · v0.1.0</span>
+        <h1 class="rv">把告警风暴，<br>筛成<span class="hl">一条该看的通知</span></h1>
+        <p class="sub rv"><b>alert-sift</b> 是 Alertmanager 兼容的告警降噪网关——去重 · 静默 · 抑制 · 聚合 · 分级 · 通知 · 持久化，<b>七阶段流水线</b>单进程跑通，并内置 <b>MCP AI 运维护栏</b>，让 AI 安全地管理你的告警系统。</p>
+        <div class="hero-cta rv">
+          <a class="btn btn-p" href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub 仓库 →</a>
+          <a class="btn btn-s" href="#quickstart">快速开始</a>
+          <a class="btn btn-s" href="#pipeline">看七阶段流水线</a>
+        </div>
+        <p class="hero-note rv"><code>vmalert -notifier.url=http://alert-sift:9999</code> — AM webhook v2 协议兼容，改一行指向即接入</p>
+      </div>
+
+      <div class="rv">
+        <div class="siftbox">
+          <span class="float-tag t1">37 条同故障风暴</span>
+          <span class="float-tag t2">1 条计数卡 · P1</span>
+          <div class="hd">
+            <span class="lg"><i></i><i></i><i></i></span>
+            <span>alert-sift · live pipeline</span>
+          </div>
+          <canvas id="sift" aria-label="告警风暴经过七阶段流水线被折叠为单条通知的示意动画" role="img"></canvas>
+          <div class="sift-stats">
+            <span>入站 <b id="sIn">0</b></span>
+            <span>过滤 <b id="sDrop">0</b></span>
+            <span class="g">送达 <b id="sOut">0</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计带 -->
+    <div class="stats rv">
+      <div class="stats-in">
+        <div class="stat"><b data-count="7">0</b><span>降噪阶段</span></div>
+        <div class="stat"><b data-count="48">0</b><span>单元用例</span></div>
+        <div class="stat"><b data-count="19">0</b><span>MCP 工具</span></div>
+        <div class="stat"><b data-count="3">0</b><span>层 AI 护栏</span></div>
+        <div class="stat"><b data-count="4.8" data-suffix="k">0</b><span>行核心代码</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 01 为什么 ================= -->
+  <section class="sec" id="why">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">01 / WHY</span></div>
+      <h2 class="rv">Alertmanager 只有 silencing / inhibition 两板斧</h2>
+      <p class="lead rv">alerta、karma 又偏重。生产环境日均千级告警最缺的六件事，<b>alert-sift 用一个单进程补齐</b>——源自生产实战沉淀，替代「Alertmanager + 一堆脚本」的松散组合。</p>
+
+      <div class="pain rv">
+        <div class="pain-h"><span>生产痛点</span><span></span><span>alert-sift 的解法</span></div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>同一故障风暴刷屏几十条</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>L2 指纹去重</code> + <code>L5 窗口聚合</code>，风暴折叠为计数卡</span></div>
+        </div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>维护窗口静默要手动改配置</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>L3 静默</code>走 YAML / API，时间窗 + 标签匹配动态增删</span></div>
+        </div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>父告警 firing，子告警照推</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>L4 抑制</code>：主机宕机压制其上全部子告警，不再连带刷 20 条</span></div>
+        </div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>机器人被限流 45009 打满配额</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>per-robot <code>令牌桶限流</code>，P0 不节流保可达</span></div>
+        </div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>P0-P4 不分级全量推送</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>L6 分级</code> + 路由树，P0 自动双发高优通知组</span></div>
+        </div>
+        <div class="pain-row">
+          <div class="bad"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" stroke="#7C8898" stroke-width="1.8" stroke-linecap="round"/></svg>让 AI 改配置，怕删库</div>
+          <div class="arw"><svg width="18" height="12" viewBox="0 0 18 12"><path d="M1 6h14m-4-4l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="good"><svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7.5l3 3 6-7" stroke="#B45309" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>guard 护栏：<code>RBAC</code> + 高危审批 + 审计 + dry_run 默认</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 02 流水线 ================= -->
+  <section class="sec" id="pipeline">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">02 / PIPELINE</span></div>
+      <h2 class="rv">七阶段流水线，每一段都能单独拆下来</h2>
+      <p class="lead rv">每阶段独立模块、可插拔——不需要的功能关掉即走，互不牵连；<b>配置全声明式 YAML</b>，样例即文档。</p>
+
+      <div class="pipe rv">
+        <div class="pipe-rail"><div class="track"></div><div class="pulse"></div></div>
+        <div class="stages">
+          <div class="stage"><div class="lv">L2</div><h3>去重</h3><div class="en">dedup</div><p>短窗冷却 / 长窗折叠，同故障只打扰一次，风暴折叠为计数卡。</p><span class="tag">P0 豁免</span></div>
+          <div class="stage"><div class="lv">L3</div><h3>静默</h3><div class="en">silence</div><p>维护时间窗 + 标签匹配；silences.yaml 或管理 API 动态增删。</p><span class="tag">maintenance</span></div>
+          <div class="stage"><div class="lv">L4</div><h3>抑制</h3><div class="en">inhibit</div><p>父告警 firing 期间压制子告警，主机宕机不再连带刷屏。</p><span class="tag">parent → child</span></div>
+          <div class="stage"><div class="lv">L5</div><h3>聚合</h3><div class="en">aggregate</div><p>窗口内同分组合并为单条通知，卡片列出成员与计数。</p><span class="tag">anti-spam</span></div>
+          <div class="stage"><div class="lv">L6</div><h3>分级</h3><div class="en">classify</div><p>显式 severity → type 兜底 → 规则名关键词；业务词配置驱动。</p><span class="tag">P0 – P4</span></div>
+          <div class="stage"><div class="lv">L7</div><h3>通知</h3><div class="en">notify</div><p>多机器人路由 + Jinja2 渲染 + 重试 + 限流，失败落盘审计。</p><span class="tag">P0 双发高优通知组</span></div>
+          <div class="stage"><div class="lv">L8</div><h3>持久化</h3><div class="en">store</div><p>活跃告警 / 历史 / 去重窗口 / 推送幂等，单文件零运维。</p><span class="tag">SQLite · 可选 MySQL</span></div>
+        </div>
+        <div class="pipe-note"><span>入口</span><code>POST /api/v2/alerts</code><span>· Alertmanager webhook v2 协议兼容</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 03 AI 护栏 ================= -->
+  <section class="sec" id="guard">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">03 / GUARD</span></div>
+      <h2 class="rv">AI 运维护栏 —— 核心差异化</h2>
+      <p class="lead rv">内置 MCP Server（<b>19 个工具</b>），AI 助手可直达「查活跃告警 → 建静默 → 改规则」全流程；<b>guard.py 为 AI 写操作上三层锁</b>，高危步骤自动拦截等人审批。</p>
+
+      <div class="guard-grid">
+        <div class="guard rv">
+          <span class="no">01</span>
+          <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.4-3 8.2-7 9.5C8 19.2 5 15.4 5 11V6l7-3z" stroke="#B45309" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 11.5l2 2 4-4.5" stroke="#B45309" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <h3>RBAC 角色隔离</h3>
+          <div class="k">configs/guard.yaml</div>
+          <p><b>ai 角色</b>仅放行读类与预览动作，<b>human 全开</b>。角色 → 动作清单一个 YAML 一目了然，越权调用直接拒绝。</p>
+        </div>
+        <div class="guard rv">
+          <span class="no">02</span>
+          <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M7 4v16M17 4v16" stroke="#B45309" stroke-width="1.7" stroke-linecap="round"/><path d="M7 8h10M7 16h10" stroke="#B45309" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="2.6 3.4"/></svg></div>
+          <h3>高危审批闭环</h3>
+          <div class="k">request_approval → approve</div>
+          <p>静默 / 抑制 / 规则 / 通知路由的写操作须<b>先申请</b>，人 approve 后才放行，<b>审批带有效期</b>，超时自动作废。</p>
+          <div class="guard-flow"><span>AI 发起</span><span>人工审批</span><span>放行执行</span></div>
+        </div>
+        <div class="guard rv">
+          <span class="no">03</span>
+          <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M6 3h9l4 4v14H6z" stroke="#B45309" stroke-width="1.7" stroke-linejoin="round"/><path d="M15 3v4h4" stroke="#B45309" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12h6M9 16h6" stroke="#B45309" stroke-width="1.7" stroke-linecap="round"/></svg></div>
+          <h3>审计 + 回滚</h3>
+          <div class="k">actor / action / params</div>
+          <p>每次写操作留<b>完整证据链</b>；<b>dry_run 预览默认开</b>，改前先看差异；.bak 自动备份，一键回滚。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 04 快速开始 ================= -->
+  <section class="sec" id="quickstart">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">04 / QUICKSTART</span></div>
+      <h2 class="rv">单进程 + SQLite，零外部依赖，5 分钟跑通</h2>
+
+      <div class="quick">
+        <div class="steps rv">
+          <div class="step"><span class="n">1</span><div><h4>安装并启动</h4><p>REST 控制面 + 通知一体，机器人 key 走 <code>${WECOM_BOT_*}</code> 环境变量，禁止明文入仓。</p></div></div>
+          <div class="step"><span class="n">2</span><div><h4>指向本服务</h4><p>vmalert / Alertmanager 改一行 notifier 指向即可，<code>webhook v2</code> 协议兼容。</p></div></div>
+          <div class="step"><span class="n">3</span><div><h4>（可选）启动 AI 护栏</h4><p>MCP Server 独立进程 <code>:9998</code>，对接 WorkBuddy / Claude Desktop 等任意 MCP 客户端。</p></div></div>
+          <div class="step"><span class="n">4</span><div><h4>管理 API 与文档</h4><p>启动后访问 <code>/docs</code> 查看全量 OpenAPI：告警查询、静默 CRUD、规则热加载、历史导出。</p></div></div>
+        </div>
+
+        <div class="rv">
+          <div class="term">
+            <div class="term-hd">
+              <span class="lg"><i></i><i></i><i></i></span>
+              <span class="t">bash — alert-sift</span>
+              <button class="cp" id="copyBtn" type="button">复制</button>
+            </div>
+<pre id="codeBlock"><span class="c"># 1. 安装并启动（REST 控制面 + 通知）</span>
+<span class="cmd">pip install -r requirements.txt</span>
+<span class="cmd">export</span> <span class="k">WECOM_BOT_APP</span>=<span class="s">"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=&lt;你的key&gt;"</span>
+<span class="cmd">uvicorn</span> app.main:app <span class="k">--host</span> 0.0.0.0 <span class="k">--port</span> 9999
+
+<span class="c"># 2. vmalert / Alertmanager 指过来（webhook v2 兼容）</span>
+<span class="cmd">vmalert</span> <span class="k">-notifier.url=</span><span class="s">http://alert-sift:9999</span>
+
+<span class="c"># 3.（可选）AI 护栏：MCP Server 独立进程</span>
+<span class="cmd">pip install</span> <span class="s">"alert-sift[mcp]"</span>
+<span class="cmd">python</span> app/mcp_server.py <span class="k">--transport</span> http <span class="k">--port</span> 9998</pre>
+          </div>
+          <p class="term-note"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.6" stroke="#7C8898" stroke-width="1.4"/><path d="M8 7.4v4M8 4.9v.9" stroke="#7C8898" stroke-width="1.5" stroke-linecap="round"/></svg><span>环境变量 <b>ALERT_SIFT_CONFIG</b> 指定主配置路径；Docker 一键容器化，官方 Dockerfile 即 build 即用。</span></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 05 数据流 ================= -->
+  <section class="sec" id="dataflow">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">05 / DATAFLOW</span></div>
+      <h2 class="rv">一条数据流，看完全部链路</h2>
+
+      <div class="flow rv">
+        <div class="flow-row">
+          <div class="fnode"><b>Prometheus / vmalert</b><span>rules evaluator</span></div>
+          <div class="fconn"></div>
+          <div class="fnode core"><b>alert-sift :9999</b><span>POST /api/v2/alerts</span></div>
+          <div class="fconn"></div>
+          <div class="fnode"><b>Notifier</b><span>路由 · Jinja2 · 限流 · 重试</span></div>
+          <div class="fconn"></div>
+          <div class="fnode"><b>企微 / 钉钉 / Slack</b><span>多机器人分发</span></div>
+        </div>
+        <div class="flow-sub">
+          <div class="fnode"><b>dedup → silence → inhibit → aggregate → classify</b><span>七阶段流水线 · 可插拔</span></div>
+        </div>
+        <div class="flow-sub" style="margin-top:14px">
+          <div class="fnode"><b>SQLite</b><span>状态 · 历史 · 审计（可选 MySQL）</span></div>
+          <div class="fnode"><b>AI 助手（MCP :9998）</b><span>⇄ guard ⇄ 核心服务</span></div>
+        </div>
+        <p class="flow-note">推送最终失败自动落盘存证，恢复后可重放，不丢告警</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 06 特性 ================= -->
+  <section class="sec" id="features">
+    <div class="wrap">
+      <div class="sec-head rv"><span class="sec-no">06 / MORE</span></div>
+      <h2 class="rv">更多特性</h2>
+
+      <div class="feats">
+        <div class="feat rv"><div class="ix">F-01</div><h4>声明式配置</h4><p>业务分组 / 项目中文名 / IP 网段兜底全部 YAML 化，业务词零硬编码。</p></div>
+        <div class="feat rv"><div class="ix">F-02</div><h4>推送健康观测</h4><p>per-robot 成功率 / 限流计数 / 最后成功时延，Prometheus 指标直接可抓。</p></div>
+        <div class="feat rv"><div class="ix">F-03</div><h4>失败落盘审计</h4><p>推送最终失败自动落盘存证，恢复后可重放，不丢告警。</p></div>
+        <div class="feat rv"><div class="ix">F-04</div><h4>一键容器化</h4><p>官方 Dockerfile，docker build 即用；管理 API 全量 OpenAPI 文档。</p></div>
+        <div class="feat rv"><div class="ix">F-05</div><h4>可插拔阶段</h4><p>每个 L 阶段独立模块，不需要的功能关掉即走，互不牵连。</p></div>
+        <div class="feat rv"><div class="ix">F-06</div><h4>48 用例护航</h4><p>classify / dedup / silence / inhibit / notify / aggregate + 端到端，CI 三版本矩阵。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 收尾 CTA ================= -->
+  <section class="final">
+    <span class="beam"></span>
+    <div class="final-in">
+      <h2 class="rv">该看的告警，<em>一条都不丢</em><br>不该看的，<em>一条都不推</em></h2>
+      <p class="rv">源自生产日均千级告警的实战沉淀 · MIT 开源 · 单进程零外部依赖</p>
+      <div class="hero-cta rv">
+        <a class="btn btn-p" href="#quickstart">快速开始</a>
+        <a class="btn btn-s" href="#guard">了解 AI 护栏</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="foot">
+    <span>alert-sift · 告警降噪网关</span>
+    <span class="sep"></span>
+    <a href="#pipeline">流水线</a>
+    <a href="#guard">AI 护栏</a>
+    <a href="#quickstart">快速开始</a>
+    <a href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub</a>
+    <span class="r">MIT License · v0.1.0 · 开源项目</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  document.documentElement.classList.add("js");
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- 滚动进度 + 导航状态 ---------- */
+  var pbar = document.getElementById("pbar"), nav = document.getElementById("nav");
+  function onScroll(){
+    var h = document.documentElement;
+    var max = h.scrollHeight - h.clientHeight;
+    pbar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + "%";
+    nav.classList.toggle("solid", h.scrollTop > 24);
+    spy();
+  }
+  document.addEventListener("scroll", onScroll, {passive:true});
+
+  /* ---------- 移动端菜单 ---------- */
+  var burger = document.getElementById("burger"), mmenu = document.getElementById("mmenu");
+  burger.addEventListener("click", function(){
+    var open = mmenu.classList.toggle("open");
+    burger.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  mmenu.addEventListener("click", function(e){
+    if(e.target.tagName === "A"){ mmenu.classList.remove("open"); burger.setAttribute("aria-expanded","false"); }
+  });
+
+  /* ---------- 入场揭示（fail-open：出错时全部显示） ---------- */
+  try{
+    var rvs = [].slice.call(document.querySelectorAll(".rv"));
+    if(reduce || !("IntersectionObserver" in window)){
+      rvs.forEach(function(el){ el.classList.add("in"); });
+    }else{
+      var io = new IntersectionObserver(function(es){
+        es.forEach(function(e){
+          if(e.isIntersecting){
+            var sibs = [].slice.call(e.target.parentNode.querySelectorAll(":scope > .rv"));
+            var i = Math.max(0, sibs.indexOf(e.target));
+            e.target.style.transitionDelay = Math.min(i * 70, 420) + "ms";
+            e.target.classList.add("in");
+            io.unobserve(e.target);
+          }
+        });
+      }, {rootMargin:"0px 0px -8% 0px", threshold:.08});
+      rvs.forEach(function(el){ io.observe(el); });
+      setTimeout(function(){ rvs.forEach(function(el){ el.classList.add("in"); }); }, 4000);
+    }
+  }catch(err){
+    [].forEach.call(document.querySelectorAll(".rv"), function(el){ el.classList.add("in"); });
+  }
+
+  /* ---------- 数字滚动 ---------- */
+  try{
+    var nums = [].slice.call(document.querySelectorAll("[data-count]"));
+    function countUp(el){
+      var target = parseFloat(el.getAttribute("data-count"));
+      var suffix = el.getAttribute("data-suffix") || "";
+      var dec = (target % 1 !== 0) ? 1 : 0;
+      if(reduce){ el.innerHTML = target.toFixed(dec) + (suffix ? "<i>"+suffix+"</i>" : ""); return; }
+      var t0 = null, dur = 1400;
+      function tick(ts){
+        if(!t0) t0 = ts;
+        var p = Math.min((ts - t0) / dur, 1);
+        var v = (1 - Math.pow(1 - p, 4)) * target;
+        el.innerHTML = v.toFixed(dec) + (suffix ? "<i>"+suffix+"</i>" : "");
+        if(p < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+    if("IntersectionObserver" in window){
+      var nio = new IntersectionObserver(function(es){
+        es.forEach(function(e){ if(e.isIntersecting){ countUp(e.target); nio.unobserve(e.target); } });
+      }, {threshold:.5});
+      nums.forEach(function(el){ nio.observe(el); });
+    }else{ nums.forEach(countUp); }
+  }catch(e){}
+
+  /* ---------- scrollspy ---------- */
+  var secs = ["why","pipeline","guard","quickstart","features"].map(function(id){ return document.getElementById(id); }).filter(Boolean);
+  var links = {};
+  [].forEach.call(document.querySelectorAll(".nav-links a"), function(a){
+    var href = a.getAttribute("href") || "";
+    if(href.charAt(0) === "#") links[href.slice(1)] = a;
+  });
+  function spy(){
+    var y = window.scrollY + 130, cur = null;
+    secs.forEach(function(s){ if(s.offsetTop <= y) cur = s.id; });
+    for(var k in links) links[k].classList.toggle("on", k === cur);
+  }
+
+  /* ---------- 复制代码 ---------- */
+  var cp = document.getElementById("copyBtn");
+  if(cp) cp.addEventListener("click", function(){
+    var txt = document.getElementById("codeBlock").innerText;
+    var done = function(){ cp.textContent = "已复制"; cp.style.color = "#0E7C52"; setTimeout(function(){ cp.textContent = "复制"; cp.style.color = ""; }, 1600); };
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done, done); }
+    else{
+      var ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta);
+      ta.select(); try{ document.execCommand("copy"); }catch(e){} document.body.removeChild(ta); done();
+    }
+  });
+
+  /* ---------- Hero「过筛」画布 ----------
+     告警芯片从左侧涌入，穿过筛门时绝大多数被吸收，仅个别通过
+     折叠为右侧的单张通知卡 —— 即产品价值的可视化。 */
+  try{
+    var cv = document.getElementById("sift");
+    if(cv && cv.getContext){
+      var ctx = cv.getContext("2d"), W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var chips = [], parts = [], sent = 0, dropped = 0, inflow = 0;
+      var cardPulse = 0, running = true, lastT = 0, spawnAcc = 0;
+      var elIn = document.getElementById("sIn"), elDrop = document.getElementById("sDrop"), elOut = document.getElementById("sOut");
+      var COL = {p0:"#FF5F56", p1:"#FF8A3D", p2:"#FFB23F", p3:"#5E6C7C", p4:"#465364"};
+
+      function resize(){
+        var r = cv.getBoundingClientRect();
+        W = Math.max(300, r.width); H = Math.max(220, r.height);
+        cv.width = W * dpr; cv.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        /* 置尺寸会清空画布：静态降级模式下立即重绘 */
+        if(reduce && typeof draw === "function") draw();
+      }
+      window.addEventListener("resize", function(){ resize(); });
+
+      function gateX(){ return W * 0.545; }
+      function cardX(){ return W * 0.76; }
+
+      function spawn(){
+        var sev = Math.random();
+        var c = sev < .1 ? COL.p0 : sev < .28 ? COL.p1 : sev < .52 ? COL.p2 : sev < .78 ? COL.p3 : COL.p4;
+        chips.push({
+          x:-40 - Math.random()*30,
+          y: 16 + Math.random()*(H-58),
+          w: 26 + Math.random()*24, h: 7,
+          v: 46 + Math.random()*50,
+          c: c, st: 0 /* 0 飞行 1 通过 2 被吸收 */
+        });
+        inflow++;
+      }
+
+      function step(dt){
+        /* 生成 */
+        spawnAcc += dt;
+        var interval = reduce ? 0.55 : 0.16;
+        while(spawnAcc > interval){ spawnAcc -= interval; spawn(); }
+        if(chips.length > 90) chips.splice(0, chips.length - 90);
+
+        var gx = gateX();
+        for(var i = chips.length - 1; i >= 0; i--){
+          var ch = chips[i];
+          ch.x += ch.v * dt;
+          if(ch.st === 0 && ch.x >= gx){
+            /* 过筛：约 1/9 通过，其余吸收 */
+            if(Math.random() < 0.11){ ch.st = 1; ch.y += (H*0.5 - ch.y) * 0.25; }
+            else{
+              ch.st = 2; dropped++;
+              for(var p = 0; p < 5; p++) parts.push({x:gx, y:ch.y, vx:(Math.random()-.3)*46, vy:(Math.random()-.5)*60, a:1, c:ch.c});
+            }
+          }
+          if(ch.st === 1){
+            /* 通过的向卡片汇聚 */
+            var tx = cardX(), ty = H*0.5;
+            ch.x += (tx - ch.x) * Math.min(1, dt*3.2);
+            ch.y += (ty - ch.y) * Math.min(1, dt*3.2);
+            if(Math.abs(ch.x - tx) < 14){
+              chips.splice(i,1); sent++; cardPulse = 1;
+            }
+            continue;
+          }
+          if(ch.st === 2){ chips.splice(i,1); continue; }
+          if(ch.x > W + 60) chips.splice(i,1);
+        }
+        /* 粒子 */
+        for(var j = parts.length - 1; j >= 0; j--){
+          var pt = parts[j];
+          pt.x += pt.vx*dt; pt.y += pt.vy*dt; pt.a -= dt*2.2;
+          if(pt.a <= 0) parts.splice(j,1);
+        }
+        if(cardPulse > 0) cardPulse = Math.max(0, cardPulse - dt*1.8);
+      }
+
+      function drawGate(){
+        var gx = gateX();
+        ctx.save();
+        ctx.strokeStyle = "rgba(180,83,9,.55)";
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([5,7]);
+        ctx.beginPath(); ctx.moveTo(gx, 8); ctx.lineTo(gx, H-8); ctx.stroke();
+        ctx.setLineDash([]);
+        /* 筛齿 */
+        ctx.strokeStyle = "rgba(180,83,9,.4)";
+        ctx.lineWidth = 2;
+        for(var y = 22; y < H-14; y += 26){
+          ctx.beginPath(); ctx.moveTo(gx-6, y); ctx.lineTo(gx+6, y+9); ctx.stroke();
+        }
+        ctx.fillStyle = "rgba(180,83,9,.9)";
+        ctx.font = "10px ui-monospace,Consolas,monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("SIFT", gx, 12);
+        ctx.restore();
+      }
+
+      function drawCard(){
+        var cx = cardX(), cy = H*0.5, w = Math.min(150, W*0.24), h = 66;
+        var s = 1 + cardPulse*0.05;
+        ctx.save();
+        ctx.translate(cx + w/2, cy); ctx.scale(s, s); ctx.translate(-(cx + w/2), -cy);
+        ctx.fillStyle = "rgba(255,255,255,.97)";
+        ctx.strokeStyle = "rgba(180,83,9," + (0.55 + cardPulse*0.45) + ")";
+        ctx.lineWidth = 1.2;
+        roundRect(ctx, cx, cy - h/2, w, h, 10); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = "#B45309";
+        ctx.font = "600 10px ui-monospace,Consolas,monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("P1 · 通知已送达", cx + 13, cy - h/2 + 20);
+        ctx.fillStyle = "#161B22";
+        ctx.font = "600 12.5px ui-monospace,Consolas,monospace";
+        ctx.fillText("主机故障 ×" + (30 + sent), cx + 13, cy - h/2 + 40);
+        ctx.fillStyle = "#697583";
+        ctx.font = "10px ui-monospace,Consolas,monospace";
+        ctx.fillText("折叠为计数卡 · 单次打扰", cx + 13, cy - h/2 + 56);
+        ctx.restore();
+      }
+
+      function roundRect(c,x,y,w,h,r){
+        c.beginPath();
+        c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+        c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+      }
+
+      function draw(){
+        ctx.clearRect(0,0,W,H);
+        drawGate();
+        /* 芯片 */
+        for(var i=0;i<chips.length;i++){
+          var ch = chips[i];
+          ctx.globalAlpha = ch.st === 2 ? .5 : 1;
+          ctx.fillStyle = ch.c;
+          roundRect(ctx, ch.x, ch.y, ch.w, ch.h, 3); ctx.fill();
+          ctx.fillStyle = "rgba(255,255,255,.28)";
+          roundRect(ctx, ch.x+3, ch.y+2, ch.w*0.45, 2.4, 1.5); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        /* 粒子 */
+        for(var j=0;j<parts.length;j++){
+          var pt = parts[j];
+          ctx.globalAlpha = Math.max(0, pt.a) * .8;
+          ctx.fillStyle = pt.c;
+          ctx.fillRect(pt.x, pt.y, 2.4, 2.4);
+        }
+        ctx.globalAlpha = 1;
+        drawCard();
+        /* 分区标注 */
+        ctx.fillStyle = "rgba(105,117,131,.9)";
+        ctx.font = "10px ui-monospace,Consolas,monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("告警入站", 12, H - 10);
+        ctx.textAlign = "right";
+        ctx.fillText("推送", W - 12, H - 10);
+      }
+
+      function frame(ts){
+        if(!running) return;
+        if(!lastT) lastT = ts;
+        var dt = Math.min((ts - lastT) / 1000, 0.05); lastT = ts;
+        if(!reduce) step(dt);
+        draw();
+        elIn.textContent = inflow; elDrop.textContent = dropped; elOut.textContent = sent;
+        requestAnimationFrame(frame);
+      }
+
+      resize();
+      if(reduce){
+        /* 静态终态：若干入站 + 单卡 */
+        for(var k=0;k<14;k++) spawn();
+        chips.forEach(function(ch,i){ ch.x = 14 + (i%7)*46; });
+        sent = 1; dropped = 36; inflow = 37;
+        draw();
+        elIn.textContent = inflow; elDrop.textContent = dropped; elOut.textContent = sent;
+      }else{
+        requestAnimationFrame(frame);
+        /* 离屏暂停 */
+        if("IntersectionObserver" in window){
+          new IntersectionObserver(function(es){
+            es.forEach(function(e){
+              if(e.isIntersecting && !running){ running = true; lastT = 0; requestAnimationFrame(frame); }
+              else if(!e.isIntersecting){ running = false; }
+            });
+          }, {threshold:0}).observe(cv);
+        }
+      }
+    }
+  }catch(e){}
+
+  onScroll();
+})();
+</script>
+</body>
+</html>

@@ -83,7 +83,7 @@ def compute_stable_fingerprint(alert) -> str:
     # 2026-10-23 P1 修复：补 host —— 原实现只认 ip/node/instance，
     # 而 SYS|Host|P3|LoadSpike / TcpConnSpike / FdWarn、SYS|Disk|P2|WriteRateHigh
     # 四条规则输出的是 host 标签 → 取不到实例 → 全主机塌陷成同一指纹
-    # （实测 10.70.0.64 / 10.70.0.199 / 10.80.1.5 均为 784372341c968cee）。
+    # （实测多台不同实例均折叠为同一指纹）。
     # 后果：reconcile 的 dict 互相覆盖产生永久僵尸 + 跨主机 dedup/ack 误抑制。
     # 2026-10-23 审查修复：补 target/collector 兜底 —— Blackbox 类告警用
     # target（Loki/nginx 等探测目标），Collector 类用 collector，labels 里

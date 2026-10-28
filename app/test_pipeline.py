@@ -106,12 +106,12 @@ class TestClassify(unittest.TestCase):
         from pipeline.classify import apply
         alert = _make_alert(
             project="SYS",
-            labels={"ip": "10.71.13.10", "instance": "10.71.13.10"}
+            labels={"ip": "10.0.13.10", "instance": "10.0.13.10"}
         )
         state = _make_state(cfg={
             "project_mapping": [
-                {"project": "APP", "ip_prefixes": ["10.71.13."]},
-                {"project": "OPS", "ip_prefixes": ["10.70.0."]},
+                {"project": "APP", "ip_prefixes": ["10.0.13."]},
+                {"project": "OPS", "ip_prefixes": ["10.0.0."]},
             ]
         })
         apply(alert, state)

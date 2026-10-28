@@ -21,3 +21,5 @@ jobs:
       - name: Unit tests
         working-directory: app
         run: python -m unittest test_pipeline -v
+      - name: Build product page (sensitive scan + root-ref check)
+        run: python web/build.py --out /tmp/alert-sift-dist --site-url https://example.com/
