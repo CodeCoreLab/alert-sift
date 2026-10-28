@@ -35,9 +35,9 @@ def _make_alert(**overrides) -> Alert:
     rule_name = overrides.get("rule_name", "TestRule")
     labels = {
         "alertname": rule_name,
-        "instance": "10.0.0.1",
+        "instance": "192.0.2.1",
         "hostname": "test-host",
-        "ip": "10.0.0.1",
+        "ip": "192.0.2.1",
         "type": "host",
     }
     labels.update(overrides.get("labels", {}))
@@ -106,12 +106,12 @@ class TestClassify(unittest.TestCase):
         from pipeline.classify import apply
         alert = _make_alert(
             project="SYS",
-            labels={"ip": "10.0.13.10", "instance": "10.0.13.10"}
+            labels={"ip": "192.0.2.10", "instance": "192.0.2.10"}
         )
         state = _make_state(cfg={
             "project_mapping": [
-                {"project": "APP", "ip_prefixes": ["10.0.13."]},
-                {"project": "OPS", "ip_prefixes": ["10.0.0."]},
+                {"project": "APP", "ip_prefixes": ["192.0.2."]},
+                {"project": "OPS", "ip_prefixes": ["203.0.113."]},
             ]
         })
         apply(alert, state)
@@ -328,12 +328,12 @@ class TestInhibit(unittest.TestCase):
         # 子告警：CPU 高
         child = _make_alert(
             rule_name="HighCPU",
-            labels={"instance": "10.0.0.1", "ip": "10.0.0.1"}
+            labels={"instance": "192.0.2.1", "ip": "192.0.2.1"}
         )
         # 父告警：主机宕机
         parent_data = {
             "rule_name": "HostDown",
-            "labels": {"instance": "10.0.0.1", "ip": "10.0.0.1"},
+            "labels": {"instance": "192.0.2.1", "ip": "192.0.2.1"},
             "status": "firing",
             "fingerprint": "parent_fp",
         }
@@ -357,11 +357,11 @@ class TestInhibit(unittest.TestCase):
         from pipeline.inhibit import is_inhibited
         child = _make_alert(
             rule_name="HighCPU",
-            labels={"instance": "10.0.0.2", "ip": "10.0.0.2"}
+            labels={"instance": "192.0.2.2", "ip": "192.0.2.2"}
         )
         parent_data = {
             "rule_name": "HostDown",
-            "labels": {"instance": "10.0.0.1", "ip": "10.0.0.1"},
+            "labels": {"instance": "192.0.2.1", "ip": "192.0.2.1"},
             "status": "firing",
             "fingerprint": "parent_fp",
         }

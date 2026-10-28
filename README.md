@@ -22,13 +22,26 @@ python -m http.server -d /tmp/alert-sift-dist 8080
 | 项 | 说明 |
 |---|---|
 | `web/index.html` | 页面源码（真源，样式与脚本全部内联） |
-| `web/build.py` | 构建脚本：注入「返回工具站」导航 + 敏感信息自检 + 根绝对引用检查 |
+| `web/build.py` | 构建脚本：打包源码包 + 注入「返回工具站」导航 + 敏感信息自检 + 根绝对引用检查 |
+| `web/make_dist.py` | 源码包打包器：取 git 已跟踪文件，包内敏感信息自检，固定时间戳可复现 |
+
+**源码包**：产品页提供 `alert-sift-<version>-src.zip` 下载，构建时由
+`build.py` 自动调用 `make_dist.py` 生成并拷入 `assets/`，页面下载入口的文件名
+与体积随之自动回填。包内容为 git 已跟踪文件（天然排除 `__pycache__`/`.env`/
+`.db` 等运行期产物），已排除 `.github/` 与打包工具自身。
+
+```bash
+# 单独打包
+python web/make_dist.py --out /tmp/dist --version v0.1.0
+```
 
 **设计约束**：
 
 - 站点地址**不写在源码里**，由 `--site-url` 注入 —— 源码可安全进公开仓库
 - 构建期做敏感信息自检（内网 IP / 内部域名 / 明文凭据 / 私钥），命中即构建失败
-- 不产生根绝对引用（`/xxx` 形式），站内跳转一律用页内锚点
+- 示例 IP 一律用 RFC 5737 文档专用网段（`192.0.2.x` / `198.51.100.x` / `203.0.113.x`），
+  天然自证非真实地址，且与真实内网段不会混淆
+- 不产生根绝对引用（`/xxx` 形式），站内跳转一律用页内锚点；下载走 `assets/` 相对路径
 
 ## 为什么不用 Alertmanager 直连 webhook
 
@@ -55,7 +68,7 @@ curl -X POST http://127.0.0.1:9999/api/v2/alerts -H 'Content-Type: application/j
   "alerts": [{
     "status": "firing",
     "labels": {"alertname": "SYS|Host|P2|CpuHigh", "project": "SYS",
-               "severity": "P2", "type": "host", "instance": "10.0.0.8"},
+               "severity": "P2", "type": "host", "instance": "192.0.2.8"},
     "annotations": {"summary": "CPU 使用率 92%"},
     "startsAt": "2026-01-01T00:00:00Z"
   }]

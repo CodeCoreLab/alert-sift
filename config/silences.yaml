@@ -8,5 +8,5 @@
 #   window: {start: "02:00", end: "04:00"}
 # - matchers:
 #     alertname: "CpuHigh"
-#     instance: "10.0.0.1"
+#     instance: "192.0.2.1"
 #   reason: "压测中，已知负载"

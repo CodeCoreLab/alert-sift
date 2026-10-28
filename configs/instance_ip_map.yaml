@@ -1,5 +1,5 @@
 # instance(主机名) → IP 映射样例
 # 用途：告警 instance 为主机名时反查 IP；IP→主机名 反向注入展示
 hosts: {}
-  # app-search-09: 10.0.1.9
-  # ops-jump-01: 10.0.2.1
+  # app-search-09: 198.51.100.9
+  # ops-jump-01: 203.0.113.1

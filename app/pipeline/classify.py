@@ -46,7 +46,7 @@ _PROJECT_CN: dict[str, str] = {}
 _PROJECT_CN_OVERRIDDEN = False
 
 # IP 网段 → 分组 兜底映射。可经 config.yaml groups.ip_prefixes 覆盖
-# （如 {"10.0.0.": "APP"}）。
+# （如 {"192.0.2.": "APP"}）。
 _IP_GROUP_PREFIXES: dict[str, str] = {}
 _IP_GROUP_LOADED = False
 
@@ -164,7 +164,7 @@ def _load_groups(state: dict[str, Any] | None) -> None:
     groups:
       prefixes: [APP, OPS]            # hostname 前缀 → 分组
       project_names: {APP: 搜索业务}  # 项目代号 → 中文显示名
-      ip_prefixes: {"10.0.0.": APP}  # IP 网段前缀 → 分组（兜底）
+      ip_prefixes: {"192.0.2.": APP}  # IP 网段前缀 → 分组（兜底）
     """
     global _GROUP_PREFIXES, _PROJECT_CN, _IP_GROUP_PREFIXES
     global _PROJECT_CN_OVERRIDDEN, _IP_GROUP_LOADED
@@ -206,7 +206,7 @@ def apply(alert: Alert, state: dict[str, Any]) -> None:
 def _inject_ip(alert: Alert) -> None:
     """从 instance / node label 注入 ip 与 hostname。
 
-    fleet 采集的 node 即 IP（如 10.0.1.48），直接作为 ip；
+    fleet 采集的 node 即 IP（如 198.51.100.48），直接作为 ip；
     instance 为主机名时需查 instance_ip_map 得到 IP。
     同时反向查表注入 hostname（IP→主机名），供模板展示分组。
     """
@@ -249,7 +249,7 @@ def _inject_group(alert: Alert) -> None:
         if host.startswith(g):
             alert.labels["group"] = g
             return
-    # IP 网段兜底：由 groups.ip_prefixes 配置（如 {"10.0.0.": "APP"}）
+    # IP 网段兜底：由 groups.ip_prefixes 配置（如 {"192.0.2.": "APP"}）
     ip = alert.labels.get("ip", "")
     for prefix, g in _IP_GROUP_PREFIXES.items():
         if ip.startswith(prefix):
