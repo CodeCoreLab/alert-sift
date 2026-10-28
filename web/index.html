@@ -115,6 +115,26 @@ a{color:inherit;text-decoration:none}
 .hero-note{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--sub)}
 .hero-note code{color:var(--mut)}
 
+/* ---------- Hero 下载入口（取代原「快速开始」跳转） ---------- */
+.dl-btn{position:relative;overflow:hidden}
+.dl-btn svg{flex:none}
+.dl-btn[aria-busy="true"]{cursor:progress;border-color:var(--acc-line);color:var(--acc-ink)}
+.dl-btn[aria-busy="true"] svg{animation:dlbob 1.1s var(--ease) infinite}
+.dl-btn[data-state="done"]{border-color:rgba(14,124,82,.45);color:var(--ok-ink)}
+@keyframes dlbob{0%,100%{transform:translateY(-2px)}50%{transform:translateY(2px)}}
+/* 进度条：贴在按钮底边，未知总长时走不定态 */
+.dl-bar{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--acc);transition:width .16s linear}
+.dl-btn[aria-busy="true"] .dl-bar[data-indet="1"]{width:38%;animation:dlindet 1.15s var(--ease) infinite}
+@keyframes dlindet{0%{transform:translateX(-110%)}100%{transform:translateX(330%)}}
+/* 结果反馈行：成功不抢眼，失败用深红保证 AA 对比（--p0 是填充色，小字偏浅） */
+.dl-msg{margin-top:12px;font-size:12.5px;line-height:1.7;color:var(--sub);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dl-msg[hidden]{display:none}
+.dl-msg.is-err{color:#A3231A}
+.dl-msg .dl-rt{font-family:inherit;font-size:12.5px;font-weight:650;color:var(--acc-ink);background:transparent;border:1px solid var(--acc-line);border-radius:7px;padding:2px 11px;cursor:pointer;transition:background .18s,border-color .18s}
+.dl-msg .dl-rt:hover{background:var(--acc-dim)}
+.dl-msg .dl-lnk{color:var(--mut);text-decoration:underline;text-underline-offset:2px}
+.dl-msg .dl-lnk:hover{color:var(--acc-ink)}
+
 /* hero 过筛画布 */
 .siftbox{position:relative;background:linear-gradient(180deg,#FFFFFF,#F1F8F7);border:1px solid var(--line2);border-radius:16px;padding:18px 18px 14px;box-shadow:0 30px 70px -30px rgba(22,60,58,.22)}
 .siftbox .hd{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11.5px;color:var(--sub);letter-spacing:.05em;margin-bottom:10px}
@@ -367,9 +387,20 @@ html.js .rv.in{opacity:1;transform:none}
         <p class="sub rv"><b>alert-sift</b> 是 Alertmanager 兼容的告警降噪网关——去重 · 静默 · 抑制 · 聚合 · 分级 · 通知 · 持久化，<b>七阶段流水线</b>单进程跑通，并内置 <b>MCP AI 运维护栏</b>，让 AI 安全地管理你的告警系统。</p>
         <div class="hero-cta rv">
           <a class="btn btn-p" href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub 仓库 →</a>
-          <a class="btn btn-s" href="#quickstart">快速开始</a>
+          <a class="btn btn-s dl-btn" id="dlBtn" href="assets/__DL_FILE__" download
+             aria-describedby="dlMsg">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M4 17v2.5A1.5 1.5 0 005.5 21h13a1.5 1.5 0 001.5-1.5V17"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span class="dl-tx">下载源码包</span>
+            <span class="dl-bar" aria-hidden="true"></span>
+          </a>
           <a class="btn btn-s" href="#pipeline">看七阶段流水线</a>
         </div>
+        <p class="dl-msg rv" id="dlMsg" role="status" aria-live="polite" hidden></p>
         <p class="hero-note rv"><code>vmalert -notifier.url=http://alert-sift:9999</code> — AM webhook v2 协议兼容，改一行指向即接入</p>
       </div>
 
@@ -760,6 +791,143 @@ html.js .rv.in{opacity:1;transform:none}
       ta.select(); try{ document.execCommand("copy"); }catch(e){} document.body.removeChild(ta); done();
     }
   });
+
+  /* ---------- Hero 下载入口 ----------
+     取代原「快速开始」锚点跳转：向 href 指向的文件地址发起 fetch，
+     流式读 body 边下边算进度（大文件可见百分比 / 未知总长走不定态），
+     文件名优先取 Content-Disposition，回退 URL 末段以保留原扩展名。
+     失败给出可读原因 + 「重试」；老浏览器无流式能力则交还原生 <a download>。 */
+  (function(){
+    var btn = document.getElementById("dlBtn");
+    if(!btn) return;
+    var msg = document.getElementById("dlMsg");
+    var tx = btn.querySelector(".dl-tx");
+    var bar = btn.querySelector(".dl-bar");
+    var url = btn.getAttribute("href");
+    var label = tx.textContent;
+    var canStream = !!(window.fetch && window.ReadableStream && window.URL && URL.createObjectURL);
+    var busy = false, doneTimer = 0;
+
+    function fmt(n){
+      if(n < 1024) return n + " B";
+      if(n < 1048576) return Math.round(n / 1024) + " KB";
+      return (n / 1048576).toFixed(1) + " MB";
+    }
+
+    function clearMsg(){ if(msg){ msg.hidden = true; msg.textContent = ""; } }
+
+    function setMsg(kind, text, retryable){
+      if(!msg) return;
+      msg.textContent = "";
+      msg.className = "dl-msg rv in" + (kind === "err" ? " is-err" : "");
+      msg.setAttribute("role", kind === "err" ? "alert" : "status");
+      msg.hidden = false;
+      var span = document.createElement("span");
+      span.textContent = text;
+      msg.appendChild(span);
+      if(!retryable) return;
+      var rt = document.createElement("button");
+      rt.type = "button"; rt.className = "dl-rt"; rt.textContent = "重试";
+      rt.addEventListener("click", start);
+      msg.appendChild(rt);
+      var lk = document.createElement("a");
+      lk.className = "dl-lnk"; lk.href = url; lk.download = ""; lk.textContent = "直接下载";
+      msg.appendChild(lk);
+    }
+
+    function pickName(res){
+      var cd = "";
+      try{ cd = res.headers.get("content-disposition") || ""; }catch(e){}
+      var m = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(cd) || /filename\s*=\s*"?([^";]+)"?/.exec(cd);
+      var name = "";
+      if(m){ try{ name = decodeURIComponent(m[1].trim()); }catch(e2){ name = m[1].trim(); } }
+      if(!name){
+        try{ name = decodeURIComponent(new URL(url, location.href).pathname.split("/").pop() || ""); }catch(e3){}
+      }
+      return name || "download";
+    }
+
+    function save(blob, name){
+      var a = document.createElement("a"), href = URL.createObjectURL(blob);
+      a.href = href; a.download = name; a.rel = "noopener";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(href); }, 4000);
+    }
+
+    function setBusy(on){
+      busy = on;
+      btn.setAttribute("aria-busy", on ? "true" : "false");
+      if(bar){ bar.style.width = ""; bar.removeAttribute("data-indet"); }
+    }
+
+    function markDone(name, size){
+      setBusy(false);
+      btn.setAttribute("data-state", "done");
+      tx.textContent = "已开始下载";
+      setMsg("ok", "已保存 " + name + (size ? "（" + fmt(size) + "）" : "") + "，请查看浏览器下载列表。", false);
+      doneTimer = setTimeout(function(){
+        btn.removeAttribute("data-state");
+        tx.textContent = label;
+        clearMsg();
+      }, 6000);
+    }
+
+    function start(){
+      if(busy) return;
+      clearTimeout(doneTimer);
+      clearMsg();
+      setBusy(true);
+      btn.setAttribute("data-state", "loading");
+      tx.textContent = "准备中…";
+
+      fetch(url, {credentials:"same-origin", cache:"no-store"}).then(function(res){
+        if(!res.ok) throw new Error("服务端返回 " + res.status + (res.statusText ? " " + res.statusText : ""));
+        var total = parseInt(res.headers.get("content-length") || "", 10);
+        var name = pickName(res);
+        if(!res.body || !res.body.getReader){
+          return res.blob().then(function(b){ save(b, name); markDone(name, b.size); });
+        }
+        var reader = res.body.getReader(), chunks = [], got = 0, lastPaint = 0;
+        if(!(total > 0) && bar){ bar.setAttribute("data-indet", "1"); }
+        function pump(){
+          return reader.read().then(function(r){
+            if(r.done){
+              var blob = new Blob(chunks, {type: res.headers.get("content-type") || "application/octet-stream"});
+              chunks = [];
+              save(blob, name);
+              markDone(name, blob.size);
+              return;
+            }
+            chunks.push(r.value);
+            got += r.value.length;
+            var now = Date.now();
+            if(now - lastPaint < 80) return pump();
+            lastPaint = now;
+            if(total > 0){
+              var pct = Math.min(100, Math.round(got / total * 100));
+              tx.textContent = "下载中 " + pct + "%";
+              if(bar) bar.style.width = pct + "%";
+            }else{
+              tx.textContent = "下载中 " + fmt(got);
+            }
+            return pump();
+          });
+        }
+        return pump();
+      }).catch(function(err){
+        setBusy(false);
+        btn.removeAttribute("data-state");
+        tx.textContent = label;
+        setMsg("err", "下载失败：" + (err && err.message ? err.message : "网络异常") + "。", true);
+      });
+    }
+
+    btn.addEventListener("click", function(e){
+      if(!canStream) return;   /* 无流式能力：保留 <a download> 原生下载 */
+      e.preventDefault();
+      start();
+    });
+  })();
 
   /* ---------- Hero「过筛」画布 ----------
      告警芯片从左侧涌入，穿过筛门时绝大多数被吸收，仅个别通过
