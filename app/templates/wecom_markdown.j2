@@ -3,12 +3,20 @@
 {% set sev_color = {'P0': 'warning', 'P1': 'warning', 'P2': 'warning', 'P3': 'comment', 'P4': 'comment'} -%}
 {{ status_emoji }} **{{ status_label }}** ｜ {{ alerts[0].project|project_cn }} ｜ 共 {{ alerts|length }} 条
 {% if tips -%}
-{{ tips }}
+{#- P2-5：tips 是本进程自己拼的敏感时段提示（BUSINESS_WINDOWS 常量 + 本地时间），
+    不是外部输入，但它以 markdown 引用块 '>' 开头 —— autoescape 会把 '>' 转成
+    '&gt;' 从而破坏引用块结构。故显式 |safe：该内容不含任何外部可控数据。 -#}
+{{ tips|safe }}
 {% endif -%}
 {% for a in alerts -%}
 {% set host = a.labels.get('hostname') or a.labels.get('host') or a.labels.get('node') or a.labels.get('ip') or a.labels.get('instance') or 'N/A' -%}
 {% set ip = a.labels.get('ip') or '' -%}
-{% set host_display = host + ('　`' + ip + '`') if (ip and ip != host) else host -%}
+{#- P2-5：host / ip 来自上游 labels（外部可控），被包进 markdown 行内代码段。
+    autoescape 不转义反引号 —— 值里带反引号就能提前闭合代码段再注入伪造 markdown。
+    故用 md_code 过滤器剔除反引号；HTML 特殊字符仍由 autoescape 处理。 -#}
+{% set host_clean = host|md_code -%}
+{% set ip_clean = ip|md_code -%}
+{% set host_display = host_clean + ('　`' + ip_clean + '`') if (ip_clean and ip_clean != host_clean) else host_clean -%}
 {% set agg = a.annotations.get('aggregated_count') or alerts[0].annotations.get('aggregated_count') or '' -%}
 {% set summary_stripped = (a.annotations.get('summary') or '').strip() -%}
 {% set rule_display = (a.rule_cn or summary_stripped or a.rule_name|friendly_name).strip() -%}
@@ -20,6 +28,13 @@
 {% if a.status == 'resolved' and a.ends_at -%}
 > **恢复**　{{ a.ends_at|fmt_time }}
 {% endif -%}
+{#- P2-5（2026-10-30）：模板已开启 autoescape（select_autoescape default=True，
+    enabled_extensions 含 j2），因此下面这些来自上游 Alertmanager webhook 的
+    annotations 字段（外部可控）默认会被 HTML 转义 —— 这正是修复目的：
+    防止 description / llm_advice 里塞 <script> 或伪造标签注入企微消息。
+    例外说明：runbook 是 markdown 链接目标，用 md_link_url 过滤器先做
+    URL 语义下的转义（保留查询串结构、拦伪协议），再 |safe 输出，
+    否则 autoescape 会把 & 转成 &amp; 导致链接里的查询参数失效。 -#}
 {% if a.annotations.description -%}
 > **详情**　{{ a.annotations.description }}
 {% endif -%}
@@ -27,7 +42,7 @@
 > **建议**　{{ a.annotations.llm_advice }}
 {% endif -%}
 {% if a.annotations.runbook -%}
-> **处置**　[查看手册]({{ a.annotations.runbook }})
+> **处置**　[查看手册]({{ a.annotations.runbook|md_link_url|safe }})
 {% endif -%}
 {% if not loop.last %}
 

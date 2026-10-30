@@ -26,6 +26,13 @@ project_mapping: []
 notifiers:
   # 企微机器人路由：project → webhook URL
   # 安全：URL 中的 key 用环境变量 ${WECOM_BOT_APP} 引用，禁止明文提交
+  #
+  # 环境变量约定（2026-10-30）：
+  #   WECOM_BOT_<PROJECT>        —— 业务通知（主链路）用的机器人
+  #   WECOM_BOT_ESCALATION_<PROJECT> —— 升级通知（EscalationEngine）专用的机器人
+  # 两者未配置独立 key 时，升级通知回退到 WECOM_BOT_<PROJECT>（向后兼容，行为不变）；
+  # 配置了独立 key 后，升级通知与业务通知进不同的群，值班时能区分消息来源，
+  # 也可把升级通知单独路由到专用机器人做独立权限/审计。
   wecom:
     robots:
       SYS: "${WECOM_BOT_SYS}"

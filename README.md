@@ -124,6 +124,26 @@ python app/mcp_server.py --transport http --port 9998
 | GET/PUT | /admin/rules | vmalert 规则读写（30s 热加载） |
 | GET | /admin/history/export | 历史导出 CSV |
 
+### 鉴权（fail-closed，2026-10-30 起）
+
+管理面与入站 webhook 均改为 **fail-closed**：未配置令牌 = 拒绝服务，不存在"未配置即匿名"。
+
+| 端点 | 环境变量 | 未配置 | 已配置但不符 | 已配置且相符 |
+|---|---|---|---|---|
+| `/admin/*`、`/mcp` | `ALERT_SIFT_ADMIN_TOKEN` | 503（管理面已禁用） | 401 | 放行（头 `X-Admin-Token`） |
+| `/api/v2/alerts` | `ALERT_SIFT_PUSH_TOKEN` | 503（入站已禁用） | 401 | 放行（头 `Authorization: Bearer` 或 `X-Push-Token`） |
+
+迁移说明：
+
+- `/admin/*` 与 `/mcp` 未配置令牌时**一律 503**。管理面含 `config_reload` /
+  `upsert_rule`（写 vmalert 规则文件）/ `update_notifier_route` /
+  `delete_silence` 等高危写操作，容器默认 `--host 0.0.0.0` 对外暴露，
+  匿名放行等于让任何人都能改规则与静默。
+- `/api/v2/alerts` 未配置令牌时**一律 503**（此前是匿名放行，任何能访问
+  9999 端口的客户端都能伪造告警）。存量部署迁移期可临时设
+  `ALERT_SIFT_ALLOW_ANON_PUSH=1` 保留匿名入站（启动后会打 WARNING 日志提醒），
+  配置令牌后请移除该开关。
+
 ## 配置
 
 全部声明式 YAML（`config/` + `configs/`），样例即文档：
@@ -139,6 +159,11 @@ python app/mcp_server.py --transport http --port 9998
 
 安全约定：机器人 webhook key 一律 `${WECOM_BOT_*}` 环境变量引用，禁止明文入仓。
 
+机器人路由分两套（2026-10-30）：`WECOM_BOT_<PROJECT>` 供业务通知使用；
+`WECOM_BOT_ESCALATION_<PROJECT>` 供升级通知（EscalationEngine）专用，
+未配置时回退到业务机器人（行为不变）。分开配置后，值班群能区分
+"业务告警"与"升级提醒"两类消息。
+
 ## 部署
 
 ```bash
@@ -146,12 +171,16 @@ python app/mcp_server.py --transport http --port 9998
 docker build -t alert-sift .
 docker run -d -p 9999:9999 \
   -e WECOM_BOT_SYS="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" \
+  -e ALERT_SIFT_PUSH_TOKEN="<vmalert 用 Bearer 传入的令牌>" \
+  -e ALERT_SIFT_ADMIN_TOKEN="<管理面令牌>" \
   -v ./config:/app/config alert-sift
 ```
 
 环境变量：`ALERT_SIFT_CONFIG`（主配置路径）、`ALERT_SIFT_ROOT`（配置根目录）、
 `ALERT_SIFT_VMALERT_URL`（vmalert 地址，用于活跃告警 reconcile）、
-`ALERT_SIFT_WECOM_RATE_PER_MIN`（出站限流，默认 15）、`ALERT_SIFT_HTTP_TIMEOUT`（默认 10s）。
+`ALERT_SIFT_WECOM_RATE_PER_MIN`（出站限流，默认 15）、`ALERT_SIFT_HTTP_TIMEOUT`（默认 10s）、
+`ALERT_SIFT_PUSH_TOKEN` / `ALERT_SIFT_ADMIN_TOKEN`（鉴权，见上文 fail-closed 说明）、
+`WECOM_BOT_<PROJECT>` / `WECOM_BOT_ESCALATION_<PROJECT>`（企微机器人 webhook）。
 
 ## 测试
 

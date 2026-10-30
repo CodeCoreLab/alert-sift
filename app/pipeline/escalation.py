@@ -24,7 +24,7 @@ from datetime import datetime
 import httpx
 
 import metrics
-from pipeline.notify import _friendly_name
+from pipeline.notify import _friendly_name, _safe_url, _scrub
 
 
 
@@ -145,7 +145,12 @@ class EscalationEngine:
                     if attempt < 2:
                         await asyncio.sleep([1, 3][attempt])
                     else:
-                        logger.error("升级推送最终失败 proj=%s: %s", proj, exc)
+                        # P1-3（2026-10-30）：当前行为是直接打印 exc，
+                        # 而 httpx 的部分异常会把请求 URL 原文（含企微 webhook
+                        # 的 key= 凭据）写进 str(exc) ⇒ 日志泄露凭据。
+                        # 改法：异常文本先过 _scrub 脱敏。
+                        logger.error("升级推送最终失败 proj=%s url=%s: %s",
+                                     proj, _safe_url(url), _scrub(str(exc), url))
         if not ok_any:
             logger.error("升级通知全部 target 失败 fp=%s lvl=%s（不记 esc meta，下轮重试）",
                          str(alert.get("fingerprint", ""))[:12], lvl)

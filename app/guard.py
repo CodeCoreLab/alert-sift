@@ -76,7 +76,10 @@ def record_audit(action, params, dry_run, ok, actor="ai", result=""):
         con.commit()
         con.close()
     except Exception as e:
-        print(f"[guard] audit log failed: {e}")
+        # 当前行为：用 print 记审计写入失败 —— print 不走 logging 体系，
+        # 没有级别/时间戳/logger 名，日志采集侧抓不到，审计链断裂完全不可见。
+        # 改法：改用本模块已有的 logger（alert-sift.guard）以 error 级别记录。
+        logger.error("审计日志写入失败 action=%s: %s", action, e)
 
 
 def audit_query(action=None, limit=50):
@@ -92,7 +95,12 @@ def audit_query(action=None, limit=50):
                 "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         con.close()
         return [dict(zip(("ts", "actor", "action", "params", "dry_run", "ok"), r)) for r in rows]
-    except Exception:
+    except Exception as e:
+        # 当前行为：except Exception 直接 return []，查询失败与"没有审计记录"
+        # 在调用方看来完全一样 —— 审计不可用被伪装成空结果，无人察觉。
+        # 改法：记 error 日志后再返回 []（保持返回类型不变，不影响调用方逻辑），
+        # 让"审计查询失败"这件事本身变得可观测。
+        logger.error("审计日志查询失败 action=%s: %s", action, e)
         return []
 
 
@@ -112,7 +120,10 @@ def request_approval(action, params, actor="ai"):
         with open(APPROVAL_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as e:
-        print(f"[guard] approval write failed: {e}")
+        # 当前行为：用 print 记审批单写入失败 —— 同 record_audit 的问题：
+        # 不走 logging 体系，审批链断裂完全不可见（且 print 与业务日志格式不一致）。
+        # 改法：改用 logger 以 error 级别记录。
+        logger.error("审批单写入失败 action=%s: %s", action, e)
     return rec["id"]
 
 

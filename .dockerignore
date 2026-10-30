@@ -1,0 +1,65 @@
+# Docker 构建上下文排除清单（2026-10-30 新增）
+#
+# 背景：Dockerfile 里 `COPY app ./app` 会把 app/ 目录下的一切都打进镜像，
+# 其中包含 app/test_pipeline.py（572 行单元测试）。测试文件进生产镜像：
+#   * 增大镜像体积与攻击面（把测试代码/断言细节暴露给外部）；
+#   * 镜像里带测试文件容易让人误以为镜像包含测试覆盖；
+#   * pytest/unittest 若被误触发可能对生产 DB 建表/写入。
+# 注意：app/test_pipeline.py 本身保留在仓库里（ci.yml 用它跑测试），
+# 这里只是不把它带进镜像。
+
+# ---- Python 缓存与字节码 ----
+# 用 **/ 前缀确保嵌套层级（app/pipeline/__pycache__ 等）也被排除
+**/__pycache__/
+**/*.py[cod]
+**/$py.class
+*.so
+**/*.so
+.Python
+
+# ---- 测试与测试缓存 ----
+# 只排除测试文件本身，不排除被测源码
+app/test_*.py
+app/**/test_*.py
+tests/
+test/
+**/.pytest_cache/
+**/.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---- 本地数据与状态（运行时生成，不应进镜像）----
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# ---- 环境与密钥（严禁进镜像）----
+.env
+.env.*
+*.pem
+*.key
+
+# ---- 版本控制与 IDE ----
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ---- 文档与前端资源（运行时不需要）----
+# 注意：web/ 是产品介绍页源码，仅由 CI 的 web/build.py 使用，
+# 运行期不需要，故不进镜像。
+web/
+CHANGELOG.md
+README.md
+LICENSE

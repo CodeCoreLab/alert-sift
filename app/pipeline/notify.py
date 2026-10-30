@@ -36,6 +36,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -230,6 +231,111 @@ def _business_window_tip() -> str:
 
 
 # ---------- 消息处理工具 ----------
+def _safe_url(url: str) -> str:
+    """脱敏 webhook URL：只保留 scheme+host+path，抹掉 query string。
+
+    背景（2026-10-30 安全修复）：企微机器人 webhook 形如
+        https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<SECRET>
+    其中 `key=` 就是机器人凭据本身。当前行为是通知失败时把完整 URL 直接
+    打进日志（notify.py 三处 + escalation.py），日志落盘/被采集后即等于
+    凭据泄露，可被直接用于向任意群发消息。
+
+    改法：所有涉及 webhook URL 的日志统一走本函数，保留 scheme://host/path
+    便于定位是哪个群/哪个端点，query string 整体丢弃。
+
+    Args:
+        url: 原始 webhook URL（可能为空、可能不是合法 URL）。
+
+    Returns:
+        脱敏后的 URL；无法解析时返回占位串，绝不回显原始 query。
+    """
+    if not url:
+        return "<empty-url>"
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        # URL 本身非法（极端输入）：连 host/path 都不保证安全，直接占位
+        return "<invalid-url>"
+    if not parts.scheme or not parts.netloc:
+        return "<invalid-url>"
+    path = parts.path or "/"
+    return f"{parts.scheme}://{parts.netloc}{path}"
+
+
+def _scrub(text: str, url: str) -> str:
+    """把文本中出现的原始 webhook URL 替换成脱敏形式。
+
+    httpx 的部分异常（InvalidURL / UnsupportedProtocol / 重定向类）会把
+    请求 URL 原文写进 str(exc)，日志里打印 exc 就等于间接把 key= 凭据打出去。
+    故凡是要记录 webhook URL 相关异常的日志，都先用本函数过一遍。
+
+    Args:
+        text: 待脱敏文本（通常是 str(exc)）。
+        url: 对应的 webhook URL（用于定位需要替换的原文）。
+
+    Returns:
+        脱敏后的文本；url 为空或文本中不含该 URL 时原样返回。
+    """
+    if not url or not text:
+        return text
+    return text.replace(url, _safe_url(url))
+
+
+def _md_code(value: str) -> str:
+    """把值渲染成可安全嵌入 markdown 行内代码（`...`）的形态。
+
+    当前行为：模板把主机名/IP 用反引号包进行内代码展示（`{{ host_display }}`），
+    而 host / ip 来自上游 Alertmanager 的 labels（外部可控）。
+    autoescape 不会转义反引号 —— 标签里带一个反引号就能提前闭合代码段，
+    再往消息里塞伪造的 markdown 链接/图片。
+
+    改法：去掉值里的反引号（代码段内容里本就不该出现反引号），
+    并交给 autoescape 继续处理 HTML 特殊字符。
+
+    Args:
+        value: 待处理的标签值（主机名 / IP 等）。
+
+    Returns:
+        已剔除反引号的文本。
+    """
+    return str(value or "").replace("`", "")
+
+
+def _md_link_url(value: str) -> str:
+    """把 URL 渲染成可安全嵌入 markdown 链接目标的形态（配合模板内 |safe 使用）。
+
+    当前行为：模板直接输出 {{ a.annotations.runbook }}。P2-5 开启 autoescape 后，
+    '&' 会被 HTML 转义成 '&amp;'，markdown 链接目标里的查询串参数就断了；
+    且 annotations 来自外部（上游 Alertmanager webhook），其中可含 ')'
+    提前闭合链接再插入伪造的 markdown 链接。
+
+    改法：
+      1) 只允许 http/https 方案（挡掉 javascript: 之类伪协议）；
+      2) 去掉控制字符（非打印字符）；空白字符改为 percent-encode（%20）——
+         直接删空白会改变 URL 语义，而 markdown 链接目标里的裸空白
+         会被多数 markdown 解析器当作链接结束符；
+      3) 只 percent-encode 会破坏 markdown 链接语法的字符
+         （空格、圆括号、尖括号、引号、反引号），
+         保留 & = ? / : # 等 URL 结构字符，查询串不被破坏。
+
+    返回值已是安全形态，模板里用 |safe 包裹，避免被 autoescape 二次 HTML 转义。
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    # 去控制字符（非打印）；空白保留 —— 交给下面的 quote 做 %20 编码
+    raw = "".join(ch for ch in raw if ch.isprintable())
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return ""
+    if parts.scheme and parts.scheme.lower() not in ("http", "https"):
+        return ""
+    # safe 白名单：URL 结构字符全部保留（查询串不坏），
+    # 其余（空格 () <> " ` 等）由 quote 做 percent-encode
+    return quote(raw, safe=":/?#[]@!$&'*+,;=%")
+
+
 def _byte_truncate(s: str, limit: int) -> str:
     """按字节安全截断（不切断 UTF-8 多字节字符）。"""
     if len(s.encode("utf-8")) <= limit:
@@ -336,9 +442,20 @@ class Notifier:
         self.cfg = cfg
         # 项目中文名（groups.project_names，替代原硬编码映射）
         set_project_names((cfg.get("groups", {}) or {}).get("project_names", {}))
+        # P2-5（2026-10-30 安全修复）：Jinja2 自动转义。
+        # 当前行为：autoescape=select_autoescape(default=False) —— 转义关闭，
+        # 模板里 {{ a.annotations.description }} / {{ a.annotations.llm_advice }} /
+        # {{ a.annotations.runbook }} 直接原样输出。这些 annotations 来自上游
+        # Alertmanager webhook（外部可控），可以注入 HTML/JS 或伪造 markdown 链接
+        # 到企微消息里（消息注入 / 钓鱼）。
+        # 改法：开启 autoescape（default=True 且把 .j2 纳入 enabled_extensions，
+        # 否则 .j2 模板仍会走 default 分支不被转义）。
+        # 说明：转义会把 & < > " ' 变成 HTML 实体；模板中 markdown 链接等
+        # 需要保留原样结构的字段已按需处理（见下方 filters 注册与模板内 |safe 用法）。
         self._env = Environment(
             loader=FileSystemLoader(str(TEMPLATE_DIR)),
-            autoescape=select_autoescape(default=False),
+            autoescape=select_autoescape(
+                default=True, enabled_extensions=("html", "xml", "j2")),
         )
         # 注册 Jinja2 过滤器
         self._env.filters["severity_emoji"] = _severity_emoji
@@ -347,6 +464,11 @@ class Notifier:
         self._env.filters["fmt_duration"] = _fmt_duration
         self._env.filters["friendly_name"] = _friendly_name
         self._env.filters["project_cn"] = _project_cn
+        # P2-5：markdown 链接目标专用过滤器（URL 结构字符保留 + 伪协议拦截），
+        # 模板里配合 |safe 使用，避免 autoescape 把查询串的 & 转成 &amp;
+        self._env.filters["md_link_url"] = _md_link_url
+        # P2-5：markdown 行内代码内容过滤器（剔除反引号，防闭合代码段后注入伪造 markdown）
+        self._env.filters["md_code"] = _md_code
 
         # P1-3 修复（2026-10-05）：模板预加载（避免热路径每次 get_template 查盘）
         self._template = self._env.get_template("wecom_markdown.j2")
@@ -438,7 +560,7 @@ class Notifier:
 
             # 路由树拆分：P0 双发额外群，其余走主群
             p0_group = [a for a in group if _is_p0(a)]  # P0-3 修复：统一判定
-            _unused_bind = [a for a in group if a.severity != "P0"]  # noqa: F841 —— 原变量 normal_group
+            # （原 normal_group 变量全仓无引用处，属死代码，已删除 —— 2026-10-30）
 
             # 主群推送（含 P0 主发 + 常规告警）
             if group:
@@ -673,9 +795,13 @@ class Notifier:
         原秒级上下文数据源已下线（2026-08-24），
         改为查 VM 的 host:* recording rule（15s 聚合）补全告警上下文。
         """
-        _unused_bind = "http://127.0.0.1:9090"  # noqa: F841 —— 原变量 vm
+        # P0-2 同类修复（2026-10-30）：原变量 vm / now 被误改名为 _unused_bind，
+        # 下方 _trend 仍引用旧名 vm / now —— 运行到此处必抛 NameError
+        # （外层 except Exception 会吞掉并静默 return None，主机上下文永远为空）。
+        # 改回原变量名，与引用处一致。
+        vm = "http://127.0.0.1:9090"
         try:
-            _unused_bind = int(time.time())  # noqa: F841 —— 原变量 now
+            now = int(time.time())
             async with httpx.AsyncClient(timeout=3) as client:
                 async def _trend(query: str) -> list[float]:
                     r = await client.get(
@@ -810,17 +936,25 @@ class Notifier:
 
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 # 网络层不可达：只报一次不重试
-                logger.error("网络不可达 url=%s err=%s", url, exc)
+                # 当前行为：把完整 webhook URL（含 key= 凭据）打进日志。
+                # 改法：URL 统一走 _safe_url 脱敏，保留 scheme+host+path 便于定位；
+                # 异常文本也过 _scrub（httpx 某些异常会把请求 URL 原文写进 str(exc)）。
+                logger.error("网络不可达 url=%s err=%s",
+                             _safe_url(url), _scrub(str(exc), url))
                 return False
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt < max_attempts - 1:
                     sleep_time = backoff[min(attempt, len(backoff) - 1)]
                     logger.warning("推送异常(重试 %d/%d) url=%s err=%s",
-                                   attempt + 1, max_attempts - 1, url, exc)
+                                   attempt + 1, max_attempts - 1, _safe_url(url),
+                                   _scrub(str(exc), url))
                     await asyncio.sleep(sleep_time)
 
-        logger.error("推送最终失败 url=%s err=%s", url, last_exc)
+        # 当前行为：把完整 webhook URL（含 key= 凭据）打进日志。
+        # 改法：URL 统一走 _safe_url 脱敏；末次异常同样过 _scrub。
+        logger.error("推送最终失败 url=%s err=%s", _safe_url(url),
+                     _scrub(str(last_exc), url) if last_exc else None)
         return False
 
 

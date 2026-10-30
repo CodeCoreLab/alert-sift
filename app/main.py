@@ -21,9 +21,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
+import sqlite3
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -43,7 +45,40 @@ from core import AppContext
 from models import AlertBatch, parse_am_payload
 from pipeline import run_pipeline, PipelineResult
 from pipeline.aggregate import Aggregator
+from pipeline.notify import _safe_url
 from utils import setup_logging
+
+
+def _app_version() -> str:
+    """读取权威版本号（唯一真相源：app/__init__.py 的 __version__）。
+
+    当前行为：main.py 里 FastAPI(version="0.2.0") 是第二份硬编码副本，
+    与 app/__init__.py 的 __version__（registry.yaml 指定的权威源）分裂，
+    改一处漏一处，OpenAPI 文档暴露的版本会与包版本不一致。
+
+    改法：统一从 app/__init__.py 读取，消除第二份副本。
+
+    实现说明：优先 `from app import __version__`（uvicorn app.main:app 启动时
+    仓库根在 sys.path 上，可用）；但 main.py 顶部把 app/ 目录本身插进了
+    sys.path（兄弟模块用 `from core import ...` 扁平导入），当以
+    `python app/main.py` 方式直接运行时仓库根不在 sys.path，
+    `import app` 会 ImportError —— 故回退到按文件路径加载 __init__.py。
+    """
+    try:
+        from app import __version__ as _pkg_version  # noqa: PLC0415
+        return str(_pkg_version)
+    except Exception:  # noqa: BLE001 —— 扁平导入路径下 app 包不可见，走文件加载
+        init_path = Path(__file__).resolve().parent / "__init__.py"
+        try:
+            spec = importlib.util.spec_from_file_location("_alert_sift_version", init_path)
+            if spec is None or spec.loader is None:
+                return "0.0.0"
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return str(getattr(module, "__version__", "0.0.0"))
+        except Exception as exc:  # noqa: BLE001 —— 读不到版本号不应阻断启动
+            logger.warning("读取 app/__init__.py 版本号失败: %s", exc)
+            return "0.0.0"
 
 
 def _to_int(value, ctx=""):
@@ -152,9 +187,14 @@ def _fetch_vmalert_fingerprints() -> set[str]:
     return fps
 
 
-async def _reconcile_loop(app: FastAPI, interval: int = RECONCILE_INTERVAL) -> None:
-    """源侧对账循环：清理僵尸 firing 并推送 resolved 通知。"""
-    ctx = app.state.ctx
+async def _reconcile_loop(state, interval: int = RECONCILE_INTERVAL) -> None:
+    """源侧对账循环：清理僵尸 firing 并推送 resolved 通知。
+
+    当前行为：形参是整个 FastAPI app 对象，内部再取 app.state。
+    改为直接接收 app.state（State 对象），使 lifespan 不必把 app 透传给后台任务
+    （P0-2：lifespan 需要在 MCP 分支与原生分支下都能独立挂载）。
+    """
+    ctx = state.ctx
     while True:
         try:
             source = await asyncio.to_thread(_fetch_vmalert_fingerprints)
@@ -166,14 +206,14 @@ async def _reconcile_loop(app: FastAPI, interval: int = RECONCILE_INTERVAL) -> N
             if resolved_alerts:
                 logger.info("源侧对账生成 %d 条 resolved 告警，送入流水线", len(resolved_alerts))
                 for alert in resolved_alerts:
-                    result = await run_pipeline(alert, app.state)
-                    await flush_aggregator(app.state, [result])
+                    result = await run_pipeline(alert, state)
+                    await flush_aggregator(state, [result])
         except Exception as exc:  # noqa: BLE001
             logger.warning("源侧对账失败（跳过）: %s", exc)
         await asyncio.sleep(interval)
 
 
-async def _escalation_loop(app: FastAPI, interval: int = ESCALATION_INTERVAL) -> None:
+async def _escalation_loop(state, interval: int = ESCALATION_INTERVAL) -> None:
     """升级策略引擎（P1-1 修复，2026-10-05）。
 
     从 main.py 内嵌逻辑重构到 pipeline.escalation.EscalationEngine：
@@ -181,10 +221,13 @@ async def _escalation_loop(app: FastAPI, interval: int = ESCALATION_INTERVAL) ->
       * ack 宽限期可配置（config escalation.ack_grace_seconds）
       * 升级消息复用 notify._friendly_name 友好化
       * 失败不写 meta，下轮自动重试
+
+    当前行为：形参是整个 FastAPI app 对象；改为接收 app.state（同 _reconcile_loop），
+    与 lifespan 解耦。
     """
     from pipeline.escalation import EscalationEngine
 
-    ctx = app.state.ctx
+    ctx = state.ctx
     cfg = ctx.cfg
     esc_cfg = cfg.get("escalation", {})
     if not esc_cfg.get("enabled", False):
@@ -192,13 +235,34 @@ async def _escalation_loop(app: FastAPI, interval: int = ESCALATION_INTERVAL) ->
         return
 
     # 机器人 URL 解析（环境变量优先，与 notify 一致）
+    #
+    # 当前行为：升级通知与业务通知复用同一组 WECOM_BOT_<PROJ> 机器人，
+    # 值班群无法区分消息来源（业务告警 vs 升级提醒），也无法把升级通知
+    # 单独路由到专用机器人。
+    # 改为：升级引擎优先使用独立机器人 WECOM_BOT_ESCALATION_<PROJ>，
+    # 未配置时回退 WECOM_BOT_<PROJ>（保持向后兼容：未配置独立 key 时行为不变）。
     resolved_robots: dict[str, str] = {}
-    for proj, cfg_url in cfg.get("notifiers", {}).get("wecom", {}).get("robots", {}).items():
-        url = os.getenv(f"WECOM_BOT_{proj.upper()}", "")
+    cfg_robots = (cfg.get("notifiers", {}) or {}).get("wecom", {}).get("robots", {}) or {}
+    # 独立升级机器人可覆盖配置中不存在的 project
+    # （例如只配 WECOM_BOT_ESCALATION_SYS，不在 notifiers.wecom.robots 里）
+    for env_key, env_val in os.environ.items():
+        if env_key.startswith("WECOM_BOT_ESCALATION_") and env_val:
+            resolved_robots[env_key[len("WECOM_BOT_ESCALATION_"):].upper()] = env_val
+    for proj, cfg_url in cfg_robots.items():
+        url = os.getenv(f"WECOM_BOT_ESCALATION_{proj.upper()}", "")
+        if not url:
+            url = os.getenv(f"WECOM_BOT_{proj.upper()}", "")
         if not url and cfg_url:
             url = os.path.expandvars(cfg_url)
         if url and not url.startswith("${"):
+            # 同时登记原始 key 与大写 key：原始 key 保持旧行为不变，
+            # 大写 key 让 escalation 策略里的 notify:[SYS] 之类匹配稳定。
             resolved_robots[proj] = url
+            resolved_robots.setdefault(proj.upper(), url)
+    # 日志只打印脱敏后的 URL（企微 webhook key 在 query 里，明文入日志即凭据泄露）
+    for proj in sorted(set(resolved_robots)):
+        logger.debug("升级通知机器人 project=%s url=%s",
+                     proj, _safe_url(resolved_robots[proj]))
 
     engine = EscalationEngine(cfg, resolved_robots)
 
@@ -234,13 +298,17 @@ def _fmt_ts(iso_str: str) -> str:
         return iso_str[:16].replace("T", " ")
 
 
-async def _metrics_push_loop(app: FastAPI,
+async def _metrics_push_loop(state,
                              interval: int = METRICS_PUSH_INTERVAL) -> None:
     """自观测指标主动推送（P0-③）：把 /metrics 文本 POST 到 VM import/prometheus。
 
     VictoriaMetrics 容器无 promscrape 抓取（数据全走 remoteWrite/import），
     故由 alert-sift 主动推送自身指标，Grafana 可直接查询 alert_sift_* 系列。
     失败静默（下次重试），不影响告警主链路。
+
+    当前行为：形参是整个 FastAPI app 对象，但函数体实际并不使用它。
+    改为接收 app.state（与 _reconcile_loop / _escalation_loop 一致），
+    与 lifespan 解耦。
     """
     while True:
         try:
@@ -300,28 +368,47 @@ def _estimate_alert_count(body: bytes) -> int:
 # ================= 应用工厂 =================
 def create_app() -> FastAPI:
     ctx = AppContext(CONFIG_PATH, DB_PATH)
-    _unused_bind = ctx.store  # noqa: F841 —— 原变量 state_store
+    # 当前行为：这一行原本写成 `_unused_bind = ctx.store`，把 store 绑定到了
+    # 一个用不到的名字上，而下方 _lifespan 里的 `state_store.cleanup_expired_meta()`
+    # 与 `state_store.close()` 仍引用旧名 state_store —— 模块级根本没有这个名字，
+    # 运行到启动清理时抛 NameError（启动清理在 try 里被 except Exception 吞掉，
+    # 退出时的 state_store.close() 在 finally 里则直接抛 NameError）。
+    # 改法：把绑定名改回 state_store，与下方引用一致。
+    state_store = ctx.store
 
     @asynccontextmanager
-    async def _lifespan(app: FastAPI):
+    async def _lifespan(_app: FastAPI | None = None):
+        # 当前行为：_lifespan 形参写死为 app（FastAPI 实例），但 FastAPI 原生
+        # lifespan 协议与 MCP lifespan 协议签名不同，导致非 MCP 分支无法直接复用；
+        # 且下方原实现从 else 分支完全没挂载过 lifespan（见 create_app 末尾）。
+        # 改法：形参改为可选；取 app 时优先用传入值，缺省回退到闭包里的 app
+        # （create_app 末尾赋值），从而两种挂载方式行为完全一致。
+        # 注意：闭包里的 app 在 create_app 返回前已赋值，lifespan 只在服务启动时执行。
+        the_app = _app if _app is not None else app
+        state = the_app.state
+
         setup_logging(ctx.cfg.get("log_level", "INFO"))
         logger.info("alert-sift 启动完成，config=%s", CONFIG_PATH)
 
         # 启动清理存量过期 meta
+        # P2-8（2026-10-30）：当前行为是用 `except Exception` + debug 日志兜底，
+        # 会把 NameError 这类真 bug 一并吞掉 —— 启动清理实际从未生效且完全不可见。
+        # 改法：只捕获存储层异常（sqlite3.Error / OSError），其余异常（如
+        # NameError / AttributeError）直接抛出，让真 bug 立刻暴露而不是静默降级。
         try:
             removed = state_store.cleanup_expired_meta()
             if removed:
                 logger.info("启动清理过期 meta %d 条", removed)
-        except Exception as _exc:  # noqa: BLE001
-            logger.debug("忽略预期内异常（降级路径）: %s", _exc)
+        except (sqlite3.Error, OSError) as _exc:
+            logger.warning("启动清理过期 meta 失败（跳过，不阻断启动）: %s", _exc)
 
         # 启动后台任务（轻量版 2026-09-04：外部化聚合循环已删除——
         # external_state 生产恒 false，单实例进程内窗口足够）
         cleanup_task = asyncio.create_task(_meta_cleanup_loop(ctx))
-        reconcile_task = asyncio.create_task(_reconcile_loop(app))
+        reconcile_task = asyncio.create_task(_reconcile_loop(state))
         # P1-⑧ 升级引擎 + P0-③ 自监控指标推送（2026-08-22）
-        escalation_task = asyncio.create_task(_escalation_loop(app))
-        metrics_push_task = asyncio.create_task(_metrics_push_loop(app))
+        escalation_task = asyncio.create_task(_escalation_loop(state))
+        metrics_push_task = asyncio.create_task(_metrics_push_loop(state))
 
         try:
             yield
@@ -342,15 +429,28 @@ def create_app() -> FastAPI:
 
     if mcp_http_app is not None:
         @asynccontextmanager
-        async def _combined_life(app: FastAPI):
-            async with mcp_http_app.lifespan(app):
-                async with _lifespan(app):
+        async def _combined_life(_app: FastAPI | None = None):
+            # 与 _lifespan 同样的解析方式：优先用传入的 app，缺省回退闭包 app，
+            # 保证 MCP 分支与原生分支拿到的是同一个 FastAPI 实例。
+            the_app = _app if _app is not None else app
+            async with mcp_http_app.lifespan(the_app):
+                async with _lifespan(the_app):
                     yield
         app_kwargs = {"lifespan": _combined_life}
     else:
-        app_kwargs = {}
+        # 当前行为（缺陷）：else 分支是 app_kwargs = {}，_lifespan 从未被挂载。
+        # 而 requirements.txt 里 fastmcp 只是可选 extra，Dockerfile 与 ci.yml
+        # 都只装基础依赖 —— 默认部署路径就是 else 分支，
+        # 于是 _meta_cleanup_loop / _reconcile_loop / _escalation_loop /
+        # _metrics_push_loop 四个后台任务一个都不启动（meta 永不清理、
+        # 僵尸 firing 永不回收、升级引擎永不触发、自监控指标永不推送）。
+        # 改法：else 分支同样挂载 _lifespan，两个分支行为一致。
+        app_kwargs = {"lifespan": _lifespan}
 
-    app = FastAPI(title="alert-sift", version="0.2.0", **app_kwargs)
+    # 版本号唯一真相源是 app/__init__.py 的 __version__（registry.yaml 指定）。
+    # 当前行为：这里硬编码了第二份副本 version="0.2.0"，与 __init__.py 的
+    # "0.1.0" 分裂，改一处漏一处。改法：统一从 app/__init__.py 导入。
+    app = FastAPI(title="alert-sift", version=_app_version(), **app_kwargs)
     app.state.ctx = ctx
     app.state.cfg = ctx.cfg
     app.state.store = ctx.store
@@ -362,20 +462,67 @@ def create_app() -> FastAPI:
     async def _guard_middleware(request: Request, call_next):
         path = request.url.path
         # vmalert/Alertmanager 兼容: /api/v1/alerts → /api/v2/alerts
+        #
+        # 当前行为：只改了 request.scope["path"]，本地 path 变量仍是 "/api/v1/alerts"，
+        # 于是下面按 path 判断的鉴权（elif path == "/api/v2/alerts"）与限流
+        # （if path == "/api/v2/alerts"）对 v1 兼容入口全部不生效 ——
+        # /api/v1/alerts 是一条完全无鉴权、无限流的旁路。
+        # 改法：本地 path 一并归一，后续鉴权/限流判断与路由实际落点保持一致。
         if path == "/api/v1/alerts":
             request.scope["path"] = "/api/v2/alerts"
+            path = "/api/v2/alerts"
 
         # 1) 鉴权
+        #
+        # 【行为变更说明 —— 2026-10-30 起由 fail-open 改为 fail-closed】
+        # 当前行为（修复前）：`if want and not _token_ok(...)` —— 当
+        # ALERT_SIFT_ADMIN_TOKEN 未配置时 want 为空串，整个鉴权 if 被短路跳过，
+        # /admin/* 与 /mcp 完全无鉴权即可访问。而 /admin 下挂着
+        # config_reload / upsert_rule（写 vmalert 规则文件）/
+        # update_notifier_route / delete_silence 等高危写操作，
+        # Dockerfile 又是 --host 0.0.0.0 对外暴露 ⇒ 任何人可改规则/静默/机器人路由。
+        # 修复后语义（fail-closed）：
+        #   * env 未配置      → 503 "ALERT_SIFT_ADMIN_TOKEN 未配置，管理面已禁用"
+        #     （不返回 401 是因为这不是"凭证错了"，而是"服务未就绪"；
+        #       503 让编排/探针能明确区分"配置缺失"与"鉴权失败"）
+        #   * env 已配置但不符 → 401
         if path.startswith("/admin") or path.startswith("/mcp"):
             want = os.getenv("ALERT_SIFT_ADMIN_TOKEN", "")
-            if want and not _token_ok(request.headers.get("X-Admin-Token", ""), want):
+            if not want:
+                # fail-closed：未配置管理令牌 = 管理面禁用，绝不匿名放行
+                logger.error(
+                    "管理面请求被拒：ALERT_SIFT_ADMIN_TOKEN 未配置，管理面已禁用 path=%s",
+                    path)
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "ALERT_SIFT_ADMIN_TOKEN 未配置，管理面已禁用"})
+            if not _token_ok(request.headers.get("X-Admin-Token", ""), want):
                 return JSONResponse(status_code=401,
                                     content={"detail": "invalid or missing admin token"})
         elif path == "/api/v2/alerts":
             want = os.getenv("ALERT_SIFT_PUSH_TOKEN", "")
             # P0-6: 支持 Bearer（vmalert bearerTokenFile）与 X-Push-Token（向后兼容）
             _got = _bearer_token(request) or request.headers.get("X-Push-Token", "")
-            if want and not _token_ok(_got, want):
+            if not want:
+                # 【行为变更 —— fail-closed】当前行为是 `if want and not _token_ok(...)`，
+                # 未配置 ALERT_SIFT_PUSH_TOKEN 时入站 webhook 完全匿名 —— 任何能访问
+                # 9999 端口的人都能伪造告警（污染去重/静默状态、刷企微机器人配额、
+                # 甚至配合畸形 payload 打内存/CPU）。修复后：未配置令牌 = 入站拒绝。
+                # 迁移开关：ALERT_SIFT_ALLOW_ANON_PUSH=1 可临时保留匿名入站
+                # （仅用于存量部署灰度迁移；开启时会打 WARNING 日志提醒尽快配置令牌）。
+                if os.getenv("ALERT_SIFT_ALLOW_ANON_PUSH", "") == "1":
+                    logger.warning(
+                        "ALERT_SIFT_ALLOW_ANON_PUSH=1 已开启：入站 webhook 处于匿名模式，"
+                        "任何能访问本端口的客户端都可伪造告警，请尽快配置 "
+                        "ALERT_SIFT_PUSH_TOKEN")
+                else:
+                    logger.error(
+                        "入站告警被拒：ALERT_SIFT_PUSH_TOKEN 未配置，入站已禁用 path=%s",
+                        path)
+                    return JSONResponse(
+                        status_code=503,
+                        content={"detail": "ALERT_SIFT_PUSH_TOKEN 未配置，入站推送已禁用"})
+            elif not _token_ok(_got, want):
                 return JSONResponse(status_code=401,
                                     content={"detail": "invalid or missing push token"})
 
@@ -390,7 +537,16 @@ def create_app() -> FastAPI:
                     return JSONResponse(status_code=429,
                                         content={"detail": "rate limit exceeded"})
             except Exception as e:  # noqa: BLE001
-                logger.error("入站限流异常, 降级放行 path=%s: %s", path, e)
+                # 当前行为：限流器自身异常时降级放行（可用性优先，告警不能因限流器
+                # 故障而全丢），但日志级别是 error —— 与"真的限流触发"混在一起，
+                # 且没有任何计数器，降级多少次完全不可观测。
+                # 改法：级别提到 warning（仍高于 info，运维能发现但不再伪装成致命错误），
+                # 并加降级计数指标，让"限流器坏了"的次数可被 Grafana/日志观测。
+                # 取舍说明：此处刻意保留 fail-open —— 限流是保护措施而非业务正确性
+                # 依赖，宁可放过少量流量也不能让告警链路整体失效。
+                metrics.inc("alert_sift_rate_limit_degraded_total", path=path)
+                logger.warning("入站限流异常, 降级放行（fail-open 有意保留）path=%s: %s",
+                               path, e)
 
         # 3) 响应 + 指标
         resp = await call_next(request)
@@ -454,6 +610,10 @@ def create_app() -> FastAPI:
             logger.error("解析告警载荷失败: %s", exc)
             return JSONResponse(status_code=400, content={"detail": f"bad payload: {exc}"})
 
+        # P0-2 同类修复（2026-10-30）：ack 宽限期分支要构造 ack 状态的 Alert，
+        # 但本模块顶层只导入了 AlertBatch / parse_am_payload，没有 Alert ——
+        # 命中 ack 宽限分支时必抛 NameError（被外层 try 吞掉后整批告警丢失）。
+        from models import Alert
         results: list[PipelineResult] = []
         for alert in batch.alerts:
             metrics.inc("alert_sift_alerts_received_total", status=alert.status)

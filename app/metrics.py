@@ -40,6 +40,9 @@ _HELP: dict[str, str] = {
     "alert_sift_llm_calls_total": "LLM call outcomes: ok/fail/circuit_open/cache_hit",
     "alert_sift_http_requests_total": "HTTP requests served, by path and status code",
     "alert_sift_rate_limited_total": "Requests rejected by token bucket, by path",
+    # P2-7（2026-10-30）：入站限流器自身异常时的降级放行次数（fail-open 保留，
+    # 但降级次数必须可观测 —— 否则限流长期失效而无人察觉）
+    "alert_sift_rate_limit_degraded_total": "Inbound rate-limiter failures degraded to fail-open, by path",
     "alert_sift_aggregate_flush_total": "Aggregator flush attempts, by success",
     "alert_sift_uptime_seconds": "Process uptime in seconds",
     "alert_sift_active_alerts": "Current active (firing) alert count",

@@ -14,8 +14,12 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from core import AppContext
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP  # noqa: F401 —— 仅注解用，运行时 fastmcp 是可选依赖
 from guard import guarded, list_approvals, approve, reject
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

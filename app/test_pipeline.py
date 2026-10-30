@@ -174,7 +174,7 @@ class TestDedup(unittest.TestCase):
         """P0 长窗口豁免"""
         from pipeline.dedup import should_skip
         alert = _make_alert(severity="P0")
-        _unused_bind = str(time.time() - 3600)  # noqa: F841 —— 原变量 old
+        old = str(time.time() - 3600)
         state = _make_state()
         state["store"].get_meta.side_effect = lambda k: old if k.startswith("repeat:") else None
         self.assertFalse(should_skip(alert, state))
@@ -183,7 +183,7 @@ class TestDedup(unittest.TestCase):
         """type=biz 视为 P0 豁免"""
         from pipeline.dedup import should_skip
         alert = _make_alert(labels={"type": "biz"})
-        _unused_bind = str(time.time() - 3600)  # noqa: F841 —— 原变量 old
+        old = str(time.time() - 3600)
         state = _make_state()
         state["store"].get_meta.side_effect = lambda k: old if k.startswith("repeat:") else None
         self.assertFalse(should_skip(alert, state))
