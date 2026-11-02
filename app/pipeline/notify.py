@@ -604,6 +604,17 @@ class Notifier:
         # 记录的是参与推送的整批，已成功的组因指纹相同仍会跳过，不重复推送。
         if all_ok:
             self._record_pushed(alerts)
+            # v0.2.0（2026-11-02）：resolved 去抖标记移到推送成功后登记
+            #（与 dedup 判定侧同键；推送失败时不登记 → 下轮自动重试恢复通知）
+            try:
+                store = self._get_store()
+                now = time.time()
+                for a in alerts:
+                    if a.status == "resolved":
+                        key = "resolved:" + (getattr(a, "stable_fingerprint", "") or a.fingerprint)
+                        store.set_meta(key, str(now), ttl=7200)
+            except Exception as exc:  # noqa: BLE001 —— 登记失败最坏多推一条恢复
+                logger.debug("resolved 去抖登记跳过: %s", exc)
 
         return all_ok
 

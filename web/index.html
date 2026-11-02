@@ -382,7 +382,7 @@ html.js .rv.in{opacity:1;transform:none}
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <span class="badge rv"><span class="dot"></span>open source · MIT · v0.1.0</span>
+        <span class="badge rv"><span class="dot"></span>open source · MIT · v0.2.0</span>
         <h1 class="rv">把告警风暴，<br>筛成<span class="hl">一条该看的通知</span></h1>
         <p class="sub rv"><b>alert-sift</b> 是 Alertmanager 兼容的告警降噪网关——去重 · 静默 · 抑制 · 聚合 · 分级 · 通知 · 持久化，<b>七阶段流水线</b>单进程跑通，并内置 <b>MCP AI 运维护栏</b>，让 AI 安全地管理你的告警系统。</p>
         <div class="hero-cta rv">
@@ -614,6 +614,8 @@ html.js .rv.in{opacity:1;transform:none}
         <div class="feat rv"><div class="ix">F-04</div><h4>一键容器化</h4><p>官方 Dockerfile，docker build 即用；管理 API 全量 OpenAPI 文档。</p></div>
         <div class="feat rv"><div class="ix">F-05</div><h4>可插拔阶段</h4><p>每个 L 阶段独立模块，不需要的功能关掉即走，互不牵连。</p></div>
         <div class="feat rv"><div class="ix">F-06</div><h4>48 用例护航</h4><p>classify / dedup / silence / inhibit / notify / aggregate + 端到端，CI 三版本矩阵。</p></div>
+        <div class="feat rv"><div class="ix">F-07</div><h4>恢复通知不吞单</h4><p>v0.2.0：resolved 去抖标记改为推送成功后登记，推送失败下轮自动重试，恢复永不静默丢失。</p></div>
+        <div class="feat rv"><div class="ix">F-08</div><h4>抑制高级别护栏</h4><p>v0.2.0：低级别根因禁止压制更高级别症状（P2 父压 P0 子即放行），宁可多看一条不漏报。</p></div>
       </div>
     </div>
   </section>
@@ -686,7 +688,7 @@ html.js .rv.in{opacity:1;transform:none}
     <a href="#guard">AI 护栏</a>
     <a href="#quickstart">快速开始</a>
     <a href="https://github.com/CodeCoreLab/alert-sift" target="_blank" rel="noopener">GitHub</a>
-    <span class="r">MIT License · v0.1.0 · 开源项目</span>
+    <span class="r">MIT License · v0.2.0 · 开源项目</span>
   </div>
 </footer>
 

@@ -32,7 +32,7 @@ python -m http.server -d /tmp/alert-sift-dist 8080
 
 ```bash
 # 单独打包
-python web/make_dist.py --out /tmp/dist --version v0.1.0
+python web/make_dist.py --out /tmp/dist --version v0.2.0
 ```
 
 **设计约束**：

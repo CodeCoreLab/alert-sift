@@ -122,12 +122,14 @@ def should_skip(alert: Alert, state: dict[str, Any]) -> bool:
     store = state.get("store")
 
     # resolved 事件去抖：短窗口内已通知过恢复 → 跳过（防抖动刷屏）
+    # v0.2.0（2026-11-02）：去抖标记不再「判定即写」，改为推送成功后由
+    # notify.send_batch 登记到同一 meta 键。原实现先写标记后推送，推送失败时
+    # 恢复通知被静默吞掉（窗口内不再重试）。现失败 → 无标记 → 下轮自动重试。
     if alert.status == "resolved":
         last_resolved = _parse_ts(store.get_meta(f"resolved:{alert.stable_fingerprint}"))
         if last_resolved is not None and (now - last_resolved) < window:
             _skip_metric("resolved_debounce")
             return True
-        store.set_meta(f"resolved:{alert.stable_fingerprint}", str(now), ttl=window)
         return False
 
     # firing：短窗口抖动抑制

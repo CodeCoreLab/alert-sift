@@ -58,6 +58,20 @@ def is_inhibited(alert: Alert, state: dict[str, Any]) -> bool:
 
         # 2) 是否存在命中"抑制方"的活跃父告警
         parent = _find_parent(alert, state, rule)
+        # v0.2.0 高级别护栏（2026-11-02）：禁止低级别根因压制级别更高的症状
+        #（P0 最严重=0；父级别数值更大 = 父更轻 → 不抑制，宁可多看一条）
+        if parent and _sev_rank(parent.severity) > _sev_rank(alert.severity):
+            logger.info(
+                "抑制护栏：父告警 %s(%s) 级别低于子告警 %s(%s)，不抑制",
+                parent.fingerprint, parent.severity,
+                alert.fingerprint, alert.severity,
+            )
+            try:
+                import metrics as _m
+                _m.inc("alert_sift_inhibit_guard_total")
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("忽略预期内异常（降级路径）: %s", _exc)
+            continue
         if parent:
             logger.info(
                 "告警 %s 被父告警 %s 抑制", alert.fingerprint, parent.fingerprint
@@ -71,6 +85,14 @@ def is_inhibited(alert: Alert, state: dict[str, Any]) -> bool:
             return True
 
     return False
+
+
+# v0.2.0（2026-11-02）：severity 数值化（P0 最严重=0；未知级别按 P3 处理）
+_SEV_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+
+
+def _sev_rank(sev: str | None) -> int:
+    return _SEV_RANK.get(sev or "P3", 3)
 
 
 def _match_ctx(alert: Alert, matchers: dict) -> bool:

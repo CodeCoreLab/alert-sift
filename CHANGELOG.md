@@ -5,12 +5,23 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.2.0] - 2026-11-02
+
+### 修复
+
+- 恢复通知去抖「先标记后推送」导致推送失败时恢复通知被吞
+  （`app/pipeline/dedup.py`、`app/pipeline/notify.py`）
+  —— resolved 去抖标记改为推送成功后在 `send_batch` 登记（与判定侧同键
+  `resolved:{stable_fingerprint}`）；失败 → 无标记 → 下轮自动重试恢复通知。
+- 抑制缺高级别护栏：低级别根因可压制级别更高的症状
+  （`app/pipeline/inhibit.py`）
+  —— 新增 `_sev_rank` 比较，父告警级别数值大于子告警（父更轻）时不抑制，
+  打点 `alert_sift_inhibit_guard_total`；对应降噪体系铁律「宁可多看一条，
+  不可漏掉一个」。
 
 ### 变更
 
-- 产品页 hero 区「快速开始」按钮改为「下载源码包」：走 fetch 流式下载并显示进度，
-  文件名取 `Content-Disposition`（缺失时回退 URL 末段），失败给出可读原因 +
+- 产品页 hero 区「快速开始」按钮改为「下载源码包」：走 fetch 流式下载并显示进度，  文件名取 `Content-Disposition`（缺失时回退 URL 末段），失败给出可读原因 +
   「重试」+「直接下载」兜底
 
 ### 修复
